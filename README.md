@@ -1,7 +1,7 @@
 # cx-cgpt
 
 A [contextualize](https://github.com/jmpaz/contextualize) source plugin for
-ChatGPT conversations, history search, and recent-history listings. Runs on
+ChatGPT conversations, public share snapshots, history search, and recent-history listings. Runs on
 macOS and Linux using the local Codex login.
 
 ## Install
@@ -22,7 +22,7 @@ For a uv-managed command, use
 existing installation, preserve its other plugin dependencies. Installing
 cx-cgpt into an unrelated environment will not make it discoverable.
 The plugin has no dependency on a particular contextualize checkout.
-Codex must be on PATH and signed in with ChatGPT (`codex login`). Set
+For private history, Codex must be on PATH and signed in with ChatGPT (`codex login`). Set
 `CX_CHATGPT_CODEX` to select another Codex executable; `CODEX_HOME` is inherited
 by Codex. The desktop application does not need to be running.
 
@@ -39,8 +39,8 @@ contextualize hydrate 'chatgpt:thread/<conversation-id>' --dir ./chat-capture
 
 These addresses read conversations accessible to the Codex-signed-in ChatGPT
 account. A URL does not grant access to someone else's private conversation.
-Public `/share/` URLs and custom GPT `/g/` or gizmo URLs are not supported;
-use a supported `/c/<conversation-id>` address for an accessible conversation.
+Custom GPT `/g/` or gizmo URLs are not supported; use a supported
+`/c/<conversation-id>` address for an accessible private conversation.
 
 `chatgpt:UUID` is also accepted. Transcripts retain the title, conversation and
 message identities, timestamps, speaker roles, model names, tool messages, and
@@ -53,6 +53,33 @@ by the plugin; contextualize's own output limits still apply.
 present in its mapping. Attachment references and structured media parts are
 preserved, but attachment and media bytes are not downloaded. Historical
 message text is source material, not instructions to the consuming agent.
+
+## Read a public share
+
+```sh
+contextualize cat 'https://chatgpt.com/share/<share-id>'
+contextualize cat 'chatgpt:share/<share-id>?output=json'
+contextualize hydrate 'https://chatgpt.com/share/<share-id>' --dir ./share-capture
+```
+
+Legacy `https://chat.openai.com/share/<share-id>` links resolve through the
+canonical `chatgpt.com` page. Public reads are anonymous: they do not start
+Codex, require login, or send authentication headers or cookies. The reader
+extracts structured conversation data embedded in the public page without
+executing JavaScript. It does not create or publish a share link.
+
+A share captures the published snapshot, which can differ from the current
+private conversation. Completeness refers to the branch present in that
+snapshot; missing root ancestry is explicitly marked unverified. `output=json` retains its structured conversation object; attachment
+bytes remain unfetched. Share IDs and private conversation IDs are distinct:
+share captures use `chatgpt/shares/<share-id>.md`, with share URL, snapshot scope,
+and any exposed backing conversation ID in metadata.
+
+Only public UUID share addresses are supported. Workspace-restricted
+`/share/e/` links are rejected. Deleted, inaccessible, challenged, or changed
+page formats fail explicitly. Public shares cannot be searched or enumerated
+through the history commands below; those commands concern the signed-in
+account's private history.
 
 ## Search and list
 
@@ -109,7 +136,7 @@ CLI equivalents `--chatgpt-query`, `--chatgpt-after`, `--chatgpt-before`,
 
 ## Authentication and capture
 
-Running a live read authorizes the plugin to use the local Codex ChatGPT
+Running a private-history read authorizes the plugin to use the local Codex ChatGPT
 session for that read. The plugin starts `codex app-server` over stdio and
 calls `getAuthStatus` with `includeToken` to obtain a session token in memory.
 Codex owns credential storage and refresh;
@@ -151,6 +178,9 @@ requires exporting Codex credentials or copying tokens into files.
 - **HTTP 403:** verify that the signed-in account can access the conversation.
   Account or service restrictions can also deny history access. The plugin
   does not bypass these restrictions.
+- **Public share fails:** open the link to check whether it remains public.
+  Login-only shares and access challenges are not bypassed. Page format changes
+  can require a plugin update; Codex login does not fix anonymous public reads.
 - **Unsupported response schema:** the backend interface may have changed.
   Report the error and Codex/plugin versions without including private
   conversation bodies or authentication data.
@@ -162,7 +192,7 @@ Use a contextualize version that preserves JSON listing envelopes. If
 structured page with `contextualize cat 'chatgpt:threads?output=json'` instead;
 its `next_target` field provides the same continuation.
 
-Conversation reads, history search, and recent listings have been exercised
+Private conversation reads, history search, and recent listings have been exercised
 against the live service on macOS and Linux with Codex **0.154.0**. This verifies
 those source operations for that version; it does not guarantee availability
 for every account or future Codex/backend release. A global contextualize

@@ -4,6 +4,7 @@ import hashlib
 import json
 from typing import Any
 
+from .public import PublicShareClient
 from .render import render_conversation
 from .service import read_page
 from .targets import Target, is_chatgpt_target, normalize_options, parse_target
@@ -41,7 +42,7 @@ def classify_target(target: str, context: dict) -> dict | None:
     parsed = _parse(target, context)
     return {
         "provider": PLUGIN_NAME, "kind": parsed.kind, "is_external": True,
-        "group_key": "chatgpt", "metadata": {"id": parsed.conversation_id},
+        "group_key": "chatgpt", "metadata": {"id": parsed.share_id or parsed.conversation_id},
         "capabilities": {"resolve": True, "listTargets": True},
     }
 
@@ -71,8 +72,8 @@ def _envelope(page: dict, context: dict) -> dict:
 
 def list_targets(target: str, context: dict) -> dict:
     parsed = _parse(target, context)
-    if parsed.kind == "thread":
-        return {"targets": [], "summary": {"kind": "thread", "hint": "Resolve this target to read its active branch."}, "pagination": None}
+    if parsed.kind in {"thread", "share"}:
+        return {"targets": [], "summary": {"kind": parsed.kind, "hint": "Resolve this target to read its active branch."}, "pagination": None}
     _require_live(context)
     overrides = {
         key: context[name] for name, key in (("list_limit", "limit"), ("list_offset", "offset"))
@@ -87,8 +88,20 @@ def list_targets(target: str, context: dict) -> dict:
 def resolve(target: str, context: dict) -> list[dict]:
     parsed = _parse(target, context)
     _require_live(context)
-    with ChatGPTClient() as client:
-        if parsed.kind == "thread":
+    client_type = PublicShareClient if parsed.kind == "share" else ChatGPTClient
+    with client_type() as client:
+        if parsed.kind == "share":
+            payload = client.get(parsed.share_id)
+            content, metadata, prose, authors = render_conversation(payload)
+            content = "Published share snapshot; completeness refers only to this snapshot, not the private conversation.\n\n" + content
+            metadata.update({
+                "share_id": parsed.share_id, "authentication": "none",
+                "source_url": f"https://chatgpt.com/share/{parsed.share_id}",
+                "capture_scope": "published_share_snapshot",
+                "backing_conversation_id": payload.get("backing_conversation_id"),
+            })
+            key = f"shares/{parsed.share_id}"
+        elif parsed.kind == "thread":
             payload = client.get(f"/conversation/{parsed.conversation_id}")
             returned_id = payload.get("conversation_id", payload.get("id"))
             if returned_id is not None and returned_id != parsed.conversation_id:
@@ -120,7 +133,7 @@ def resolve(target: str, context: dict) -> list[dict]:
             "content": content, "prose": prose, "prose_authors": authors,
             "metadata": {
                 **metadata, "provider": PLUGIN_NAME, "kind": parsed.kind,
-                "source_ref": "chatgpt", "scope_id": parsed.conversation_id or parsed.kind,
+                "source_ref": "chatgpt", "scope_id": parsed.share_id or parsed.conversation_id or parsed.kind,
                 "trace_path": parsed.canonical, "context_subpath": f"chatgpt/{key}.md",
             },
         }]

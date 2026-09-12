@@ -28,7 +28,6 @@ def test_thread_aliases_have_one_identity(raw):
     [
         "https://chatgpt.com.evil.test/c/" + ID,
         "https://chatgpt.com@evil.test/c/" + ID,
-        "https://chatgpt.com/share/" + ID,
         "http://chatgpt.com/c/" + ID,
         "cass:codex/" + ID,
     ],
@@ -107,3 +106,83 @@ def test_opaque_search_cursor_roundtrips():
 def test_search_cursor_and_backend_limit_validation(raw):
     with pytest.raises(ValueError):
         parse_target(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        f"chatgpt:share/{ID}",
+        f"chatgpt:share/{ID};",
+        f"https://chatgpt.com/share/{ID}",
+        f"https://chatgpt.com/share/{ID};",
+        f"https://chat.openai.com/share/{ID}",
+        f"https://chat.openai.com/share/{ID};",
+    ],
+)
+def test_share_aliases_have_distinct_share_identity(raw):
+    target = parse_target(raw)
+    assert target.kind == "share"
+    assert target.share_id == ID
+    assert target.conversation_id is None
+    assert target.canonical == f"chatgpt:share/{ID}"
+    assert target != parse_target(f"chatgpt:thread/{ID}")
+    assert parse_target(target.canonical) == target
+
+
+def test_share_json_output_override():
+    target = parse_target(
+        f"https://chat.openai.com/share/{ID}?output=transcript", {"output": "json"}
+    )
+    assert target.options == {"output": "json"}
+    assert target.canonical == f"chatgpt:share/{ID}?output=json"
+    assert parse_target(target.canonical) == target
+
+
+@pytest.mark.parametrize(
+    "options",
+    [{"limit": 2}, {"query": "x"}, {"after": "2026-01-01"}, {"output": "csv"}],
+)
+def test_share_rejects_inapplicable_overrides(options):
+    with pytest.raises(ValueError):
+        parse_target(f"chatgpt:share/{ID}", options)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "chatgpt:share",
+        "chatgpt:share/",
+        "chatgpt:share/not-a-uuid",
+        "https://chatgpt.com/share",
+        "https://chatgpt.com/share/",
+        "https://chatgpt.com/share/not-a-uuid",
+        "https://chat.openai.com/share/not-a-uuid",
+        f"https://chatgpt.com/share//{ID}",
+        f"https://chatgpt.com/share/{ID}/extra",
+        f"https://chatgpt.com/share/{ID}#fragment",
+        f"https://chatgpt.com/share/{ID}?limit=2",
+        f"https://chatgpt.com/share/e/{ID}",
+        f"https://chat.openai.com/share/e/{ID}",
+        f"chatgpt:share/e/{ID}",
+    ],
+)
+def test_claimed_malformed_share_targets_fail_explicitly(raw):
+    assert is_chatgpt_target(raw)
+    with pytest.raises(ValueError):
+        parse_target(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        f"https://chat.openai.com/c/{ID}",
+        f"http://chatgpt.com/share/{ID}",
+        f"https://chatgpt.com.evil.test/share/{ID}",
+        f"https://chatgpt.com@evil.test/share/{ID}",
+        f"https://chat.openai.com.evil.test/share/{ID}",
+        f"https://chat.openai.com@evil.test/share/{ID}",
+    ],
+)
+def test_share_support_does_not_expand_private_or_impostor_hosts(raw):
+    assert not is_chatgpt_target(raw)
+    assert parse_target(raw) is None

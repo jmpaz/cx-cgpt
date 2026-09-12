@@ -169,3 +169,47 @@ def test_cli_options_collect_into_context_overrides(fake_client):
     assert "output=json" in result.output
     assert fake_client.calls[0][1]["query"] == "moodbox"
     assert plugin.collect_cli_overrides("list", {"chatgpt_query": "ignored"}) is None
+
+
+@pytest.mark.parametrize("output", ["transcript", "json"])
+def test_public_share_never_uses_codex_and_keeps_separate_identity(monkeypatch, fake_client, output):
+    payload = {**conversation(), "backing_conversation_id": OTHER_ID}
+
+    class AnonymousClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def get(self, share_id):
+            assert share_id == ID
+            return payload
+
+    monkeypatch.setattr(plugin, "PublicShareClient", AnonymousClient)
+    item, = plugin.resolve(f"https://chatgpt.com/share/{ID}?output={output}", {})
+    assert fake_client.instances == 0
+    assert item["source"] == f"chatgpt:share/{ID}?output={output}"
+    assert item["metadata"]["context_subpath"] == f"chatgpt/shares/{ID}.md"
+    assert item["metadata"]["share_id"] == ID
+    assert item["metadata"]["backing_conversation_id"] == OTHER_ID
+    assert item["metadata"]["capture_scope"] == "published_share_snapshot"
+    assert item["metadata"]["authentication"] == "none"
+    if output == "json":
+        assert json.loads(item["content"]) == payload
+    else:
+        assert "Published share snapshot" in item["content"]
+        assert "Explain this code." in item["content"]
+
+
+def test_public_share_offline_operations_do_not_construct_transport(monkeypatch, fake_client):
+    def forbidden():
+        pytest.fail("Public transport must not be constructed")
+
+    monkeypatch.setattr(plugin, "PublicShareClient", forbidden)
+    target = f"chatgpt:share/{ID}"
+    assert plugin.classify_target(target, {})["metadata"]["id"] == ID
+    assert plugin.list_targets(target, {"cache_only": True})["targets"] == []
+    with pytest.raises(ValueError, match="offline"):
+        plugin.resolve(target, {"cache_only": True})
+    assert fake_client.instances == 0

@@ -9,6 +9,7 @@ from uuid import UUID
 
 _OPTIONS = {
     "thread": {"output"},
+    "share": {"output"},
     "threads": {"after", "before", "limit", "offset", "output"},
     "search": {"query", "cursor", "after", "before", "limit", "offset", "output"},
 }
@@ -22,10 +23,16 @@ class Target:
     kind: str
     conversation_id: str | None
     options: dict[str, Any]
+    share_id: str | None = None
 
     @property
     def canonical(self) -> str:
-        body = f"thread/{self.conversation_id}" if self.kind == "thread" else self.kind
+        if self.kind == "thread":
+            body = f"thread/{self.conversation_id}"
+        elif self.kind == "share":
+            body = f"share/{self.share_id}"
+        else:
+            body = self.kind
         query = urlencode(sorted(self.options.items()))
         return f"chatgpt:{body}" + (f"?{query}" if query else "")
 
@@ -38,10 +45,12 @@ def is_chatgpt_target(raw: str) -> bool:
         return True
     try:
         url = urlsplit(raw)
-        return (
-            url.scheme == "https"
-            and url.netloc == "chatgpt.com"
-            and url.path.startswith("/c/")
+        if url.scheme != "https":
+            return False
+        if url.netloc == "chatgpt.com" and url.path.startswith("/c/"):
+            return True
+        return url.netloc in {"chatgpt.com", "chat.openai.com"} and (
+            url.path == "/share" or url.path.startswith("/share/")
         )
     except ValueError:
         return False
@@ -108,7 +117,12 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
         url = urlsplit(raw)
         if url.fragment:
             raise ValueError("ChatGPT conversation targets do not support fragments")
-        body = "thread/" + url.path.removeprefix("/c/").rstrip(";").rstrip("/")
+        if url.path == "/share" or url.path.startswith("/share/"):
+            body = "share/" + (
+                url.path.removeprefix("/share/") if url.path != "/share" else ""
+            ).rstrip(";").rstrip("/")
+        else:
+            body = "thread/" + url.path.removeprefix("/c/").rstrip(";").rstrip("/")
         query = url.query
     elif raw.startswith("chatgpt-conversation://"):
         body, _, query = raw.removeprefix("chatgpt-conversation://").partition("?")
@@ -116,7 +130,19 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
     else:
         body, _, query = raw.removeprefix("chatgpt:").partition("?")
         body = body.strip("/")
-    if body in {"", "threads"}:
+    share_id = None
+    if body == "share" or body.startswith("share/"):
+        kind, identifier = "share", None
+        candidate = body.removeprefix("share/").rstrip(";")
+        if candidate.startswith("e/"):
+            raise ValueError(
+                "Workspace-restricted ChatGPT share URLs are not supported"
+            )
+        try:
+            share_id = str(UUID(candidate))
+        except ValueError as exc:
+            raise ValueError("ChatGPT share targets require a UUID share ID") from exc
+    elif body in {"", "threads"}:
         kind, identifier = "threads", None
     elif body == "search":
         kind, identifier = "search", None
@@ -135,4 +161,4 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
     options = normalize_options({**dict(pairs), **normalize_options(overrides)}, kind)
     if kind == "search" and "query" not in options:
         raise ValueError("ChatGPT search requires query")
-    return Target(kind, identifier, options)
+    return Target(kind, identifier, options, share_id)
