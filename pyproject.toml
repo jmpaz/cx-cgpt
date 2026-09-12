@@ -1,0 +1,20 @@
+[project]
+name = "cx-cgpt"
+version = "0.1.0"
+description = "ChatGPT history source for contextualize, authenticated through Codex"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["click>=8.1"]
+
+[project.entry-points."contextualize.plugins"]
+chatgpt = "cx_cgpt.plugin"
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
