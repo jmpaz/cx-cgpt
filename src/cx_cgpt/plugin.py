@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from .public import PublicShareClient
-from .render import render_conversation
+from .render import iso_timestamp, render_conversation
 from .service import read_page
 from .targets import Target, is_chatgpt_target, normalize_options, parse_target
 from .transport import ChatGPTClient
@@ -51,7 +51,12 @@ def _entry(item: dict) -> dict:
     identifier = item.get("conversation_id", item.get("id"))
     return {
         "target": f"chatgpt:thread/{identifier}", "label": item.get("title") or "Untitled conversation",
-        "kind": "thread", "traverse": False, "metadata": item,
+        "kind": "thread", "traverse": False,
+        "metadata": {
+            **item, "conversation_id": identifier, "title": item.get("title"),
+            "source_created": iso_timestamp(item.get("create_time")),
+            "source_modified": iso_timestamp(item.get("update_time")),
+        },
     }
 
 

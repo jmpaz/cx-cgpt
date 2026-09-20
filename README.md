@@ -117,7 +117,10 @@ its `chatgpt:thread/...` target to `contextualize cat`.
 Search uses ChatGPT's live history search. Listings use update time descending
 and exclude archived conversations; search retains archived results when the
 service returns them. Listing entries are references and do not automatically
-read their conversations. The default result limit is 20, maximum 100.
+read their conversations. The default result limit is 20, maximum 100. Each
+entry keeps the service's own conversation fields and adds `conversation_id`,
+`title`, `source_created`, and `source_modified` in ISO-8601 UTC, at no extra
+request.
 
 The service does not expose date bounds on these endpoints. `after` and
 `before` therefore filter conversation **update time** locally, including for

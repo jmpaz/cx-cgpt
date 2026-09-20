@@ -146,6 +146,22 @@ def test_list_context_overrides_target_page_size(fake_client):
     assert result["pagination"]["nextOffset"] == 4
 
 
+def test_listing_entries_carry_title_and_times_without_extra_requests(fake_client):
+    fake_client.responses = [{
+        "items": [{"id": ID, "title": "Current",
+                   "create_time": "2026-05-01T12:00:00.000000+00:00",
+                   "update_time": 1800000000}],
+        "total": 1,
+    }]
+    result = plugin.list_targets("chatgpt:threads?limit=1", {})
+    metadata = result["targets"][0]["metadata"]
+    assert metadata["conversation_id"] == ID
+    assert metadata["title"] == "Current"
+    assert metadata["source_created"] == "2026-05-01T12:00:00Z"
+    assert metadata["source_modified"] == "2027-01-15T08:00:00Z"
+    assert len(fake_client.calls) == 1
+
+
 def test_search_list_continuation_preserves_page_cursor(fake_client):
     fake_client.responses = [{"items": [{"conversation_id": ID, "title": "Current"}, {"conversation_id": OTHER_ID}], "cursor": "later"}]
     result = plugin.list_targets("chatgpt:search?query=moodbox&cursor=current&limit=1", {})
