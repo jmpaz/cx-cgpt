@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-def _timestamp(value: Any) -> str | None:
+def iso_timestamp(value: Any) -> str | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if not math.isfinite(value):
             return None
@@ -19,7 +19,97 @@ def _timestamp(value: Any) -> str | None:
             )
         except (OverflowError, OSError, ValueError):
             return None
-    return value if isinstance(value, str) and value else None
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    parsed = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _thoughts(content: Any) -> str:
+    if not isinstance(content, dict):
+        return ""
+    thoughts = content.get("thoughts")
+    parts = []
+    for thought in thoughts if isinstance(thoughts, list) else []:
+        if not isinstance(thought, dict):
+            continue
+        for key in ("summary", "content"):
+            value = thought.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value.strip())
+    return "\n\n".join(parts)
+
+
+def _approx_tokens(segments: list[dict[str, Any]]) -> int | None:
+    characters = sum(len(segment["text"]) for segment in segments)
+    return math.ceil(characters / 4) if characters else None
+
+
+class _Segments:
+    """Turn-level segments: one entry per conversational turn, in order."""
+
+    def __init__(self) -> None:
+        self.entries: list[dict[str, Any]] = []
+        self._turn: dict[str, Any] | None = None
+
+    def user(self, text: str, timestamp: str | None) -> None:
+        self._close()
+        if text.strip():
+            self._append("user", text.strip(), timestamp, [])
+
+    def assistant(
+        self, text: str, timestamp: str | None, *, reasoning: bool = False
+    ) -> None:
+        turn = self._open(timestamp)
+        if text.strip():
+            turn["reasoning" if reasoning else "text"].append(text.strip())
+
+    def tool(self, name: Any, timestamp: str | None) -> None:
+        turn = self._open(timestamp)
+        if isinstance(name, str) and name and name not in turn["tools"]:
+            turn["tools"].append(name)
+
+    def finish(self) -> list[dict[str, Any]]:
+        self._close()
+        return self.entries
+
+    def _open(self, timestamp: str | None) -> dict[str, Any]:
+        if self._turn is None:
+            self._turn = {
+                "start_time": timestamp,
+                "reasoning": [],
+                "text": [],
+                "tools": [],
+            }
+        return self._turn
+
+    def _close(self) -> None:
+        turn, self._turn = self._turn, None
+        if turn is None:
+            return
+        blocks = ["\n\n".join(turn["reasoning"]), "\n\n".join(turn["text"])]
+        if turn["tools"]:
+            blocks.append("[tools: " + ", ".join(turn["tools"]) + "]")
+        text = "\n\n".join(block for block in blocks if block)
+        if text:
+            self._append("assistant", text, turn["start_time"], turn["tools"])
+
+    def _append(
+        self, role: str, text: str, timestamp: str | None, tools: list[str]
+    ) -> None:
+        self.entries.append(
+            {
+                "index": len(self.entries),
+                "role": role,
+                "text": text,
+                "start_time": timestamp,
+                "tools": list(tools),
+            }
+        )
 
 
 def _label(value: Any) -> str:
@@ -100,6 +190,45 @@ def _content(content: Any) -> tuple[str, str]:
     return "Structured content:\n\n" + _json_block(content), ""
 
 
+def _record_turn(
+    segments: "_Segments",
+    message: dict[str, Any],
+    detail: dict[str, Any],
+    provenance: dict[str, Any],
+    prose: str,
+    name: Any,
+) -> None:
+    role = provenance["role"]
+    timestamp = provenance["created"]
+    hidden = (
+        role == "system"
+        or bool(detail.get("is_visually_hidden_from_conversation"))
+        or bool(detail.get("is_user_system_message"))
+    )
+    if role == "user":
+        segments.user("" if hidden else prose, timestamp)
+        return
+    if hidden:
+        return
+    recipient = provenance["recipient"]
+    if role == "tool":
+        segments.tool(name or recipient, timestamp)
+        return
+    if role != "assistant":
+        return
+    if recipient not in (None, "all"):
+        segments.tool(recipient, timestamp)
+    elif provenance["channel"] == "analysis" or provenance["content_type"] in (
+        "thoughts",
+        "reasoning_recap",
+    ):
+        segments.assistant(
+            prose or _thoughts(message.get("content")), timestamp, reasoning=True
+        )
+    else:
+        segments.assistant(prose, timestamp)
+
+
 def render_conversation(
     payload: dict[str, Any],
 ) -> tuple[str, dict[str, Any], str, list[str]]:
@@ -108,8 +237,8 @@ def render_conversation(
     nodes, issues = _active_branch(payload)
     title = payload.get("title") or "Untitled conversation"
     identifier = payload.get("conversation_id") or payload.get("id")
-    created = _timestamp(payload.get("create_time"))
-    modified = _timestamp(payload.get("update_time"))
+    created = iso_timestamp(payload.get("create_time"))
+    modified = iso_timestamp(payload.get("update_time"))
     lines = [
         f"# {_label(title)}",
         "",
@@ -129,6 +258,7 @@ def render_conversation(
         ]
     )
     message_metadata, prose_parts, authors, models = [], [], [], []
+    segments = _Segments()
     for node in nodes:
         message = node.get("message")
         if message is None:
@@ -144,7 +274,7 @@ def render_conversation(
         detail = message.get("metadata")
         detail = detail if isinstance(detail, dict) else {}
         model = detail.get("model_slug") or detail.get("default_model_slug")
-        timestamp = _timestamp(message.get("create_time"))
+        timestamp = iso_timestamp(message.get("create_time"))
         message_id = message.get("id") or node.get("id")
         lines.extend([f"## {_label(author_label)}", ""])
         provenance = {
@@ -154,7 +284,7 @@ def render_conversation(
             "name": name,
             "model": model,
             "created": timestamp,
-            "updated": _timestamp(message.get("update_time")),
+            "updated": iso_timestamp(message.get("update_time")),
             "recipient": message.get("recipient"),
             "channel": message.get("channel"),
             "content_type": message.get("content", {}).get("content_type")
@@ -194,6 +324,7 @@ def render_conversation(
                 authors.append(author_label)
         if model and model not in models:
             models.append(model)
+        _record_turn(segments, message, detail, provenance, prose, name)
     if issues:
         lines.extend(
             [
@@ -210,6 +341,7 @@ def render_conversation(
                 "",
             ]
         )
+    turns = segments.finish()
     metadata = {
         "conversation_id": identifier,
         "title": title,
@@ -219,9 +351,12 @@ def render_conversation(
         "branch": "active",
         "complete": not issues,
         "incomplete_reasons": issues,
-        "message_count": len(message_metadata),
+        "message_count": len(turns),
         "messages": message_metadata,
+        "model": models[-1] if models else None,
         "models": models,
+        "approx_tokens": _approx_tokens(turns),
+        "segments": turns,
         "media_fetched": False,
     }
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors

@@ -143,3 +143,137 @@ def test_missing_parent_field_is_incomplete():
     del payload["mapping"]["root"]["parent"]
     _, metadata, _, _ = render_conversation(payload)
     assert not metadata["complete"]
+
+
+def test_segments_mirror_turns_with_times_and_counts():
+    payload = conversation()
+    payload["mapping"]["question"]["message"]["create_time"] = 1700000000
+    payload["mapping"]["answer"]["message"]["create_time"] = 1700000060
+    _, metadata, _, _ = render_conversation(payload)
+    assert metadata["segments"] == [
+        {
+            "index": 0,
+            "role": "user",
+            "text": "Question",
+            "start_time": "2023-11-14T22:13:20Z",
+            "tools": [],
+        },
+        {
+            "index": 1,
+            "role": "assistant",
+            "text": "Answer",
+            "start_time": "2023-11-14T22:14:20Z",
+            "tools": [],
+        },
+    ]
+    assert metadata["message_count"] == 2
+    assert metadata["model"] == "example-model"
+    assert metadata["approx_tokens"] == 4
+    assert "Alternative" not in [segment["text"] for segment in metadata["segments"]]
+
+
+def test_reasoning_tool_calls_and_results_join_their_assistant_turn():
+    payload = conversation()
+    payload["mapping"].update(
+        {
+            "analysis": {
+                "id": "analysis",
+                "parent": "question",
+                "message": message(
+                    "an", "assistant", "Weighing options", channel="analysis"
+                ),
+            },
+            "call": {
+                "id": "call",
+                "parent": "analysis",
+                "message": message(
+                    "c", "assistant", "print(1)", recipient="python", channel="analysis"
+                ),
+            },
+            "result": {
+                "id": "result",
+                "parent": "call",
+                "message": message(
+                    "r", "tool", "1", author={"role": "tool", "name": "python"}
+                ),
+            },
+        }
+    )
+    payload["mapping"]["answer"]["parent"] = "result"
+    _, metadata, _, _ = render_conversation(payload)
+    assert [segment["role"] for segment in metadata["segments"]] == [
+        "user",
+        "assistant",
+    ]
+    assistant = metadata["segments"][1]
+    assert assistant["text"] == "Weighing options\n\nAnswer\n\n[tools: python]"
+    assert assistant["tools"] == ["python"]
+    assert "print(1)" not in assistant["text"]
+    assert metadata["message_count"] == 2
+
+
+def test_thoughts_content_becomes_assistant_reasoning():
+    payload = conversation()
+    payload["mapping"]["analysis"] = {
+        "id": "analysis",
+        "parent": "question",
+        "message": message("an", "assistant", "ignored"),
+    }
+    payload["mapping"]["analysis"]["message"]["content"] = {
+        "content_type": "thoughts",
+        "thoughts": [{"summary": "Checking", "content": "the parts list"}],
+    }
+    payload["mapping"]["answer"]["parent"] = "analysis"
+    _, metadata, _, _ = render_conversation(payload)
+    assert metadata["segments"][1]["text"] == "Checking\n\nthe parts list\n\nAnswer"
+
+
+def test_system_and_hidden_messages_stay_out_of_segments():
+    payload = conversation()
+    payload["mapping"].update(
+        {
+            "system": {
+                "id": "system",
+                "parent": "question",
+                "message": message("s", "system", "You are helpful"),
+            },
+            "first": {
+                "id": "first",
+                "parent": "system",
+                "message": message("f", "assistant", "First answer"),
+            },
+            "instructions": {
+                "id": "instructions",
+                "parent": "first",
+                "message": message(
+                    "i",
+                    "user",
+                    "Preferred tone",
+                    metadata={"is_user_system_message": True},
+                ),
+            },
+        }
+    )
+    payload["mapping"]["answer"]["parent"] = "instructions"
+    _, metadata, _, _ = render_conversation(payload)
+    assert [
+        (segment["role"], segment["text"]) for segment in metadata["segments"]
+    ] == [
+        ("user", "Question"),
+        ("assistant", "First answer"),
+        ("assistant", "Answer"),
+    ]
+    assert "You are helpful" not in str(metadata["segments"])
+    assert "Preferred tone" not in str(metadata["segments"])
+
+
+def test_hidden_message_metadata_is_still_rendered_and_counted_as_provenance():
+    payload = conversation()
+    payload["mapping"]["answer"]["message"]["metadata"][
+        "is_visually_hidden_from_conversation"
+    ] = True
+    text, metadata, _, _ = render_conversation(payload)
+    assert "Answer" in text
+    assert len(metadata["messages"]) == 2
+    assert [segment["role"] for segment in metadata["segments"]] == ["user"]
+    assert metadata["message_count"] == 1

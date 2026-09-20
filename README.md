@@ -49,6 +49,22 @@ this is the selected branch, not an interleaving of alternative responses.
 Broken or missing ancestry is explicitly marked incomplete. Nothing is clipped
 by the plugin; contextualize's own output limits still apply.
 
+Resolved conversations and public shares carry `metadata.segments`: one entry
+per conversational turn on the selected branch, each with `index`, `role`
+(`user` or `assistant`), `text`, `start_time` (the message's create time in
+ISO-8601 UTC, null when the message has none), and `tools`, so downstream
+indexers can store turns as searchable segments. An assistant turn merges the
+reasoning, tool calls, tool results, and reply that belong to it; the tools it
+used are named in `tools` and in a trailing `[tools: ...]` line, while tool
+arguments and outputs stay in the transcript. System messages, custom
+instructions, and messages hidden from the conversation are kept in the
+transcript and left out of segments. Session metadata beside them:
+`conversation_id`, `title`, `model` and `models`, `message_count` (turns, the
+unit `segments` counts), `approx_tokens` (segment text estimated at four
+characters per token, null when there is no text), `source_created`, and
+`source_modified`. `metadata.messages` keeps one provenance entry per branch
+message.
+
 `?output=json` returns the conversation object, including alternative branches
 present in its mapping. Attachment references and structured media parts are
 preserved, but attachment and media bytes are not downloaded. Historical

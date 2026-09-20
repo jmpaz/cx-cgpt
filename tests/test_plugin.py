@@ -64,6 +64,11 @@ def test_thread_alias_resolution_preserves_provenance(target, fake_client):
     assert item["prose_authors"] == ["user", "assistant"]
     assert item["metadata"]["scope_id"] == ID
     assert item["metadata"]["complete"] is True
+    assert [segment["text"] for segment in item["metadata"]["segments"]] == [
+        "Explain this code.", "This is a visual instrument.",
+    ]
+    assert item["metadata"]["message_count"] == 2
+    assert item["metadata"]["approx_tokens"] == 12
     assert fake_client.calls == [(f"/conversation/{ID}", None)]
     assert fake_client.closed == 1
 
@@ -195,6 +200,9 @@ def test_public_share_never_uses_codex_and_keeps_separate_identity(monkeypatch, 
     assert item["metadata"]["backing_conversation_id"] == OTHER_ID
     assert item["metadata"]["capture_scope"] == "published_share_snapshot"
     assert item["metadata"]["authentication"] == "none"
+    assert [segment["role"] for segment in item["metadata"]["segments"]] == [
+        "user", "assistant",
+    ]
     if output == "json":
         assert json.loads(item["content"]) == payload
     else:
