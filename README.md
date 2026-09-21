@@ -44,8 +44,11 @@ Custom GPT `/g/` or gizmo URLs are not supported; use a supported
 
 `chatgpt:UUID` is also accepted. Transcripts retain the title, conversation and
 message identities, timestamps, speaker roles, model names, tool messages, and
-structured content. They follow `current_node` back through its ancestors:
-this is the selected branch, not an interleaving of alternative responses.
+structured content. Where the service retained no output for a tool message,
+the transcript states that in place of the empty body, naming the invoked app
+or tool when the metadata names one. They follow `current_node` back through
+its ancestors: this is the selected branch, not an interleaving of alternative
+responses.
 Broken or missing ancestry is explicitly marked incomplete. Nothing is clipped
 by the plugin; contextualize's own output limits still apply.
 

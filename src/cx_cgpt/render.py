@@ -191,6 +191,48 @@ def _content(content: Any) -> tuple[str, str]:
     return "Structured content:\n\n" + _json_block(content), ""
 
 
+def _empty_tool_output(role: Any, content: Any) -> bool:
+    return (
+        role == "tool"
+        and isinstance(content, dict)
+        and isinstance(content.get("text"), str)
+        and not content["text"].strip()
+    )
+
+
+def _invoked_name(detail: dict[str, Any], name: Any) -> str | None:
+    resource = detail.get("invoked_resource")
+    if isinstance(resource, dict):
+        app = resource.get("app_name")
+        if isinstance(app, str) and app.strip():
+            return app.strip()
+    plugin = detail.get("invoked_plugin")
+    if isinstance(plugin, dict):
+        namespace = plugin.get("namespace")
+        if isinstance(namespace, str) and namespace.strip():
+            return namespace.strip()
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None
+
+
+def _unretained_output(
+    content: dict[str, Any], detail: dict[str, Any], name: Any
+) -> str:
+    invoked = _invoked_name(detail, name)
+    notice = "Tool output not retained in conversation history by the service"
+    notice += f" ({_label(invoked)})." if invoked else "."
+    remaining = {
+        key: value
+        for key, value in content.items()
+        if key not in {"text", "content_type", "language", "response_format_name"}
+        and value is not None
+    }
+    if remaining:
+        notice += "\n\nAdditional content fields:\n\n" + _json_block(remaining)
+    return notice
+
+
 def _record_turn(
     segments: "_Segments",
     message: dict[str, Any],
@@ -307,7 +349,10 @@ def render_conversation(
                 "",
             ]
         )
-        body, prose = _content(message.get("content"))
+        content = message.get("content")
+        body, prose = _content(content)
+        if _empty_tool_output(role, content):
+            body = _unretained_output(content, detail, name)
         lines.extend([body, ""])
         attachments = detail.get("attachments")
         if attachments:

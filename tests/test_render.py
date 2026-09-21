@@ -10,6 +10,22 @@ def message(identifier, role, content, **extra):
     }
 
 
+def tool_message(identifier, text, **metadata):
+    return {
+        "id": identifier,
+        "author": {"role": "tool", "name": "api_tool.call_tool"},
+        "recipient": "all",
+        "channel": "commentary",
+        "content": {
+            "content_type": "code",
+            "language": "json",
+            "response_format_name": None,
+            "text": text,
+        },
+        "metadata": metadata,
+    }
+
+
 def conversation():
     return {
         "id": "conversation",
@@ -87,6 +103,84 @@ def test_tool_message_name_recipient_and_code_content():
     assert metadata["messages"][1]["recipient"] == "all"
     assert metadata["messages"][1]["channel"] == "analysis"
     assert authors[-1] == "tool (python)"
+
+
+def tool_exchange():
+    payload = conversation()
+    payload["mapping"].update(
+        {
+            "call": {
+                "id": "call",
+                "parent": "question",
+                "message": {
+                    "id": "c",
+                    "author": {"role": "assistant"},
+                    "recipient": "api_tool.call_tool",
+                    "content": {
+                        "content_type": "code",
+                        "language": "json",
+                        "response_format_name": None,
+                        "text": '{"path": "/Example App/list"}',
+                    },
+                },
+            },
+            "empty": {
+                "id": "empty",
+                "parent": "call",
+                "message": tool_message(
+                    "e",
+                    "",
+                    invoked_plugin={},
+                    invoked_resource={
+                        "resource_uri": "/asdk_app_0001/link_0002/list",
+                        "publish_status": "private",
+                        "app_name": "Example App",
+                    },
+                    request_id="00000000-0000-0000-0000-000000000000",
+                ),
+            },
+            "output": {
+                "id": "output",
+                "parent": "empty",
+                "message": tool_message("o", '{"items": 2}'),
+            },
+        }
+    )
+    payload["mapping"]["answer"]["parent"] = "output"
+    return payload
+
+
+def test_empty_tool_output_names_the_invoked_app_and_drops_default_fields():
+    text, metadata, prose, _ = render_conversation(tool_exchange())
+    assert (
+        "Tool output not retained in conversation history by the service (Example App)."
+        in text
+    )
+    assert '{"path": "/Example App/list"}' in text
+    assert '{"items": 2}' in text
+    assert text.count("Additional content fields") == 2
+    assert "asdk_app_0001" not in text
+    assert "not retained" not in prose
+    assert metadata["segments"][1]["tools"] == ["api_tool.call_tool"]
+    assert metadata["segments"][1]["text"] == "Answer\n\n[tools: api_tool.call_tool]"
+
+
+def test_empty_tool_output_without_invoked_metadata_names_the_tool():
+    payload = tool_exchange()
+    payload["mapping"]["empty"]["message"]["metadata"] = {}
+    text, _, _, _ = render_conversation(payload)
+    assert (
+        "Tool output not retained in conversation history by the service"
+        " (api_tool.call_tool)." in text
+    )
+
+
+def test_empty_tool_output_keeps_content_fields_that_carry_information():
+    payload = tool_exchange()
+    payload["mapping"]["empty"]["message"]["content"]["result"] = {"status": "expired"}
+    text, _, _, _ = render_conversation(payload)
+    assert '"status": "expired"' in text
+    assert "response_format_name" not in text.split("## tool")[1]
 
 
 def test_missing_ancestor_retains_reachable_messages_and_marks_incomplete():
