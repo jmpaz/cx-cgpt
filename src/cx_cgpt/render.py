@@ -91,7 +91,8 @@ class _Segments:
         turn, self._turn = self._turn, None
         if turn is None:
             return
-        blocks = ["\n\n".join(turn["reasoning"]), "\n\n".join(turn["text"])]
+        said = "\n\n".join(turn["text"]) or "\n\n".join(turn["reasoning"])
+        blocks = [said]
         if turn["tools"]:
             blocks.append("[tools: " + ", ".join(turn["tools"]) + "]")
         text = "\n\n".join(block for block in blocks if block)

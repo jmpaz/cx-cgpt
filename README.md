@@ -53,10 +53,11 @@ Resolved conversations and public shares carry `metadata.segments`: one entry
 per conversational turn on the selected branch, each with `index`, `role`
 (`user` or `assistant`), `text`, `start_time` (the message's create time in
 ISO-8601 UTC, null when the message has none), and `tools`, so downstream
-indexers can store turns as searchable segments. An assistant turn merges the
-reasoning, tool calls, tool results, and reply that belong to it; the tools it
-used are named in `tools` and in a trailing `[tools: ...]` line, while tool
-arguments and outputs stay in the transcript. System messages, custom
+indexers can store turns as searchable segments. An assistant turn spans the
+reasoning, tool calls, tool results, and reply that belong to it, and its `text`
+is the reply; reasoning stands in only when the turn has no reply. The tools it
+used are named in `tools` and in a trailing `[tools: ...]` line, while reasoning,
+tool arguments and outputs stay in the transcript. System messages, custom
 instructions, and messages hidden from the conversation are kept in the
 transcript and left out of segments. Session metadata beside them:
 `conversation_id`, `title`, `model` and `models`, `message_count` (turns, the

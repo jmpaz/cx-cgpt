@@ -206,7 +206,7 @@ def test_reasoning_tool_calls_and_results_join_their_assistant_turn():
         "assistant",
     ]
     assistant = metadata["segments"][1]
-    assert assistant["text"] == "Weighing options\n\nAnswer\n\n[tools: python]"
+    assert assistant["text"] == "Answer\n\n[tools: python]"
     assert assistant["tools"] == ["python"]
     assert "print(1)" not in assistant["text"]
     assert metadata["message_count"] == 2
@@ -224,8 +224,19 @@ def test_thoughts_content_becomes_assistant_reasoning():
         "thoughts": [{"summary": "Checking", "content": "the parts list"}],
     }
     payload["mapping"]["answer"]["parent"] = "analysis"
+    transcript, metadata, _, _ = render_conversation(payload)
+    assert metadata["segments"][1]["text"] == "Answer"
+    assert "the parts list" in transcript
+
+
+def test_a_turn_with_no_reply_keeps_its_reasoning_as_the_segment():
+    payload = conversation()
+    payload["mapping"]["answer"]["message"]["content"] = {
+        "content_type": "thoughts",
+        "thoughts": [{"summary": "Checking", "content": "the parts list"}],
+    }
     _, metadata, _, _ = render_conversation(payload)
-    assert metadata["segments"][1]["text"] == "Checking\n\nthe parts list\n\nAnswer"
+    assert metadata["segments"][1]["text"] == "Checking\n\nthe parts list"
 
 
 def test_system_and_hidden_messages_stay_out_of_segments():
