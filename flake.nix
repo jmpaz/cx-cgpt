@@ -1,5 +1,5 @@
 {
-  description = "ChatGPT history source plugin for contextualize";
+  description = "ChatGPT and claude.ai conversation source plugins for contextualize";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -17,9 +17,10 @@
             pyproject = true;
             src = self;
             build-system = [ pkgs.python312Packages.hatchling ];
-            dependencies = [ pkgs.python312Packages.click ];
+            dependencies = with pkgs.python312Packages;
+              [ click cryptography ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ secretstorage ];
             nativeCheckInputs = [ pkgs.python312Packages.pytestCheckHook ];
-            pythonImportsCheck = [ "cx_cgpt.plugin" ];
+            pythonImportsCheck = [ "cx_cgpt.plugin" "cx_cgpt.claude.plugin" ];
           };
         in {
           default = plugin;

@@ -1,8 +1,11 @@
 # cx-cgpt
 
-A [contextualize](https://github.com/jmpaz/contextualize) source plugin for
-ChatGPT conversations, public share snapshots, history search, and recent-history listings. Runs on
-macOS and Linux using the local Codex login.
+[contextualize](https://github.com/jmpaz/contextualize) source plugins for
+ChatGPT and claude.ai conversations. The `chatgpt` source reads private history
+through the local Codex login, plus public share snapshots, history search, and
+recent-history listings. The `claude` source reads claude.ai chats and chat
+listings through your Chrome sign-in; see [claude.ai](#claudeai). Both run on
+macOS and Linux.
 
 ## Install
 
@@ -15,7 +18,7 @@ uv pip install --python .venv/bin/python /path/to/contextualize /path/to/cx-cgpt
 .venv/bin/contextualize plugins
 ```
 
-The plugin should appear as the `chatgpt` source. Activate that environment
+The plugin should appear as the `chatgpt` and `claude` sources. Activate that environment
 before using the commands below, or invoke `.venv/bin/contextualize` directly.
 For a uv-managed command, use
 `uv tool install --with /path/to/cx-cgpt /path/to/contextualize`. When extending an
@@ -184,6 +187,81 @@ Saved transcripts and JSON contain private conversation material. Choose their
 storage and sharing permissions accordingly; neither setup nor troubleshooting
 requires exporting Codex credentials or copying tokens into files.
 
+## claude.ai
+
+The `claude` source reads your claude.ai chats: the active branch, with each
+assistant turn's thinking, tool calls, tool results, and reply in the order
+they happened.
+
+```sh
+contextualize cat 'https://claude.ai/chat/<conversation-id>'
+contextualize cat 'claude:chat/<conversation-id>?tool=t3'
+contextualize cat --list --json 'claude:chats?limit=20'
+contextualize cat 'claude:chats?after=2026-09-01'
+```
+
+### Session
+
+Reads use your claude.ai sign-in from Google Chrome. Each read takes the
+`sessionKey` and `lastActiveOrg` cookies from the Chrome profile's cookie store
+and decrypts them with Chrome's Safe Storage key: from the Secret Service
+keyring on Linux, or the Keychain on macOS, which asks for permission the first
+time. Nothing is written to disk, and Chrome does not need to be running. If
+reads start failing with HTTP 401 or 403, sign in to claude.ai in that profile
+again.
+
+- `CX_CLAUDE_CHROME_PROFILE`: a profile directory name such as `Profile 2`, or
+  a path. Defaults to `Default`.
+- `CX_CLAUDE_SESSION_KEY`: use this session instead of Chrome's. Set
+  `CX_CLAUDE_ORG` with it.
+- `CX_CLAUDE_ORG`: the organization UUID, for chats outside the organization
+  you last used on claude.ai.
+
+claude.ai rejects OAuth tokens on these endpoints, including Claude Code's, so
+a browser session is the only credential that works. That session can do
+anything you can do on claude.ai; the plugin only sends GET requests to the
+conversation and listing endpoints. Those are claude.ai's internal web
+endpoints, not a published API, and they can change without notice.
+
+### Transcripts
+
+A chat renders its active branch: the path to the current message, without the
+alternatives left behind by retries and edits. Within an assistant turn:
+
+- Thinking appears as `>` quotes. claude.ai returns only summaries of hidden
+  thinking, and the transcript header says when that is all there is.
+- Each tool call appears as `↪ name [t1] (input)`, marked `✗` if it failed.
+  Its result is previewed: the first ~160 and last ~80 tokens, with a
+  `read_full` target for the rest.
+- Replies follow, with any cited URLs listed underneath.
+
+`?tool=t3` renders one call in full: its input, output, MCP
+`structuredContent`, and `meta`. This is the view for debugging an MCP server.
+`result_head_tokens` and `result_tail_tokens` resize the preview; token counts
+are estimated at four characters per token. `?output=json` returns claude.ai's
+own conversation object, including every branch.
+
+Text pasted or uploaded into a message is included. File and image bytes are
+not fetched.
+
+Metadata follows the ChatGPT source: `segments` (one per turn, with `index`,
+`role`, `text`, `start_time`, and `tools`), `message_count`, `approx_tokens`,
+`model`, `source_created`, and `source_modified`. `tool_calls` lists each
+call's handle, name, integration, MCP server URL, and error flag. `reasoning`
+is `"summaries"` when claude.ai hid the thinking.
+
+### Listing
+
+`claude:chats` lists chats most recently updated first. `limit` defaults to 20
+(maximum 100) and `offset` pages through the rest. `after` and `before` filter
+on `updated_at` the same way the ChatGPT listing does. To continue, follow the
+`Continue:` line or `next_target`. Search is not supported yet.
+
+CLI flags `--claude-tool`, `--claude-limit`, `--claude-offset`,
+`--claude-after`, `--claude-before`, `--claude-output`,
+`--claude-result-head-tokens`, and `--claude-result-tail-tokens` override
+target options. Manifest configuration uses the `claude` provider key.
+
 ## Troubleshooting
 
 - **The `chatgpt` source is absent:** run `contextualize plugins` using the
@@ -222,6 +300,10 @@ for every account or future Codex/backend release. A global contextualize
 installation is separate from testing a source checkout: verify discovery with
 `contextualize plugins` after installing into your chosen environment.
 
+claude.ai chat reads and listings have been exercised against the live service
+on Linux with Google Chrome 149. The macOS Keychain path is covered by tests
+only.
+
 ## Development
 
 ```sh
@@ -232,8 +314,8 @@ uv build
 
 Tests use synthetic conversations and mocked transport; they need no account
 or network. A live smoke test can use the `contextualize cat` commands above
-after installation and Codex login. It reads private history through that
-machine's signed-in account.
+after installation, with Codex signed in for ChatGPT or Chrome signed in to
+claude.ai. It reads private history through that machine's signed-in account.
 
 Nix users can build this plugin with `nix build`. When constructing a
 contextualize environment with `mkContextualize`, include this source in

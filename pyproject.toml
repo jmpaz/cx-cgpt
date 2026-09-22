@@ -1,13 +1,18 @@
 [project]
 name = "cx-cgpt"
 version = "0.1.0"
-description = "ChatGPT history source for contextualize, authenticated through Codex"
+description = "ChatGPT and claude.ai conversation sources for contextualize"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["click>=8.1"]
+dependencies = [
+  "click>=8.1",
+  "cryptography>=42",
+  "secretstorage>=3.3; sys_platform == 'linux'",
+]
 
 [project.entry-points."contextualize.plugins"]
 chatgpt = "cx_cgpt.plugin"
+claude = "cx_cgpt.claude.plugin"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
