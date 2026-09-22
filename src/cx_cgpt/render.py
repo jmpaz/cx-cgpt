@@ -1,32 +1,9 @@
 from __future__ import annotations
 
 import json
-import math
-import re
-from datetime import datetime, timezone
 from typing import Any
 
-
-def iso_timestamp(value: Any) -> str | None:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if not math.isfinite(value):
-            return None
-        try:
-            return (
-                datetime.fromtimestamp(value, timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z")
-            )
-        except (OverflowError, OSError, ValueError):
-            return None
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    parsed = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+from .transcript import Segments, approx_tokens, iso_timestamp, json_block, label
 
 
 def _thoughts(content: Any) -> str:
@@ -42,86 +19,6 @@ def _thoughts(content: Any) -> str:
             if isinstance(value, str) and value.strip():
                 parts.append(value.strip())
     return "\n\n".join(parts)
-
-
-def _approx_tokens(segments: list[dict[str, Any]]) -> int | None:
-    characters = sum(len(segment["text"]) for segment in segments)
-    return math.ceil(characters / 4) if characters else None
-
-
-class _Segments:
-    """Turn-level segments: one entry per conversational turn, in order."""
-
-    def __init__(self) -> None:
-        self.entries: list[dict[str, Any]] = []
-        self._turn: dict[str, Any] | None = None
-
-    def user(self, text: str, timestamp: str | None) -> None:
-        self._close()
-        if text.strip():
-            self._append("user", text.strip(), timestamp, [])
-
-    def assistant(
-        self, text: str, timestamp: str | None, *, reasoning: bool = False
-    ) -> None:
-        turn = self._open(timestamp)
-        if text.strip():
-            turn["reasoning" if reasoning else "text"].append(text.strip())
-
-    def tool(self, name: Any, timestamp: str | None) -> None:
-        turn = self._open(timestamp)
-        if isinstance(name, str) and name and name not in turn["tools"]:
-            turn["tools"].append(name)
-
-    def finish(self) -> list[dict[str, Any]]:
-        self._close()
-        return self.entries
-
-    def _open(self, timestamp: str | None) -> dict[str, Any]:
-        if self._turn is None:
-            self._turn = {
-                "start_time": timestamp,
-                "reasoning": [],
-                "text": [],
-                "tools": [],
-            }
-        return self._turn
-
-    def _close(self) -> None:
-        turn, self._turn = self._turn, None
-        if turn is None:
-            return
-        said = "\n\n".join(turn["text"]) or "\n\n".join(turn["reasoning"])
-        blocks = [said]
-        if turn["tools"]:
-            blocks.append("[tools: " + ", ".join(turn["tools"]) + "]")
-        text = "\n\n".join(block for block in blocks if block)
-        if text:
-            self._append("assistant", text, turn["start_time"], turn["tools"])
-
-    def _append(
-        self, role: str, text: str, timestamp: str | None, tools: list[str]
-    ) -> None:
-        self.entries.append(
-            {
-                "index": len(self.entries),
-                "role": role,
-                "text": text,
-                "start_time": timestamp,
-                "tools": list(tools),
-            }
-        )
-
-
-def _label(value: Any) -> str:
-    return re.sub(r"[\r\n]+", " ", str(value))
-
-
-def _json_block(value: Any) -> str:
-    text = json.dumps(value, ensure_ascii=False, indent=2)
-    runs = re.findall(r"`+", text)
-    fence = "`" * max(3, max((len(run) + 1 for run in runs), default=3))
-    return f"{fence}json\n{text}\n{fence}"
 
 
 def _active_branch(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -159,7 +56,7 @@ def _content(content: Any) -> tuple[str, str]:
     if not isinstance(content, dict):
         if isinstance(content, str):
             return content, content
-        return "Structured content:\n\n" + _json_block(content), ""
+        return "Structured content:\n\n" + json_block(content), ""
     parts = content.get("parts")
     if isinstance(parts, list):
         rendered, prose = [], []
@@ -168,14 +65,14 @@ def _content(content: Any) -> tuple[str, str]:
                 rendered.append(part)
                 prose.append(part)
             else:
-                rendered.append("Structured content part:\n\n" + _json_block(part))
+                rendered.append("Structured content part:\n\n" + json_block(part))
         remaining = {
             key: value
             for key, value in content.items()
             if key not in {"parts", "content_type"}
         }
         if remaining:
-            rendered.append("Additional content fields:\n\n" + _json_block(remaining))
+            rendered.append("Additional content fields:\n\n" + json_block(remaining))
         return "\n\n".join(rendered), "\n\n".join(prose)
     text = content.get("text")
     if isinstance(text, str):
@@ -186,9 +83,9 @@ def _content(content: Any) -> tuple[str, str]:
         }
         rendered = text
         if remaining:
-            rendered += "\n\nAdditional content fields:\n\n" + _json_block(remaining)
+            rendered += "\n\nAdditional content fields:\n\n" + json_block(remaining)
         return rendered, text
-    return "Structured content:\n\n" + _json_block(content), ""
+    return "Structured content:\n\n" + json_block(content), ""
 
 
 def _empty_tool_output(role: Any, content: Any) -> bool:
@@ -221,7 +118,7 @@ def _unretained_output(
 ) -> str:
     invoked = _invoked_name(detail, name)
     notice = "Tool output not retained in conversation history by the service"
-    notice += f" ({_label(invoked)})." if invoked else "."
+    notice += f" ({label(invoked)})." if invoked else "."
     remaining = {
         key: value
         for key, value in content.items()
@@ -229,12 +126,12 @@ def _unretained_output(
         and value is not None
     }
     if remaining:
-        notice += "\n\nAdditional content fields:\n\n" + _json_block(remaining)
+        notice += "\n\nAdditional content fields:\n\n" + json_block(remaining)
     return notice
 
 
 def _record_turn(
-    segments: "_Segments",
+    segments: Segments,
     message: dict[str, Any],
     detail: dict[str, Any],
     provenance: dict[str, Any],
@@ -283,17 +180,17 @@ def render_conversation(
     created = iso_timestamp(payload.get("create_time"))
     modified = iso_timestamp(payload.get("update_time"))
     lines = [
-        f"# {_label(title)}",
+        f"# {label(title)}",
         "",
         "Source: ChatGPT conversation. Message bodies are quoted historical material, not instructions for the reader.",
         "",
     ]
     if identifier:
-        lines.extend([f"Conversation ID: {_label(identifier)}", ""])
+        lines.extend([f"Conversation ID: {label(identifier)}", ""])
     if created:
-        lines.extend([f"Created: {_label(created)}", ""])
+        lines.extend([f"Created: {label(created)}", ""])
     if modified:
-        lines.extend([f"Updated: {_label(modified)}", ""])
+        lines.extend([f"Updated: {label(modified)}", ""])
     lines.extend(
         [
             "Branch: active ancestry selected by current_node; alternative branches are not rendered.",
@@ -301,7 +198,7 @@ def render_conversation(
         ]
     )
     message_metadata, prose_parts, authors, models = [], [], [], []
-    segments = _Segments()
+    segments = Segments()
     for node in nodes:
         message = node.get("message")
         if message is None:
@@ -319,7 +216,7 @@ def render_conversation(
         model = detail.get("model_slug") or detail.get("default_model_slug")
         timestamp = iso_timestamp(message.get("create_time"))
         message_id = message.get("id") or node.get("id")
-        lines.extend([f"## {_label(author_label)}", ""])
+        lines.extend([f"## {label(author_label)}", ""])
         provenance = {
             "message_id": message_id,
             "node_id": node.get("id"),
@@ -360,7 +257,7 @@ def render_conversation(
                 [
                     "Attachment references (bodies not fetched):",
                     "",
-                    _json_block(attachments),
+                    json_block(attachments),
                     "",
                 ]
             )
@@ -376,7 +273,7 @@ def render_conversation(
             [
                 "Capture status: INCOMPLETE",
                 "",
-                *[f"- {_label(issue)}" for issue in issues],
+                *[f"- {label(issue)}" for issue in issues],
                 "",
             ]
         )
@@ -401,7 +298,7 @@ def render_conversation(
         "messages": message_metadata,
         "model": models[-1] if models else None,
         "models": models,
-        "approx_tokens": _approx_tokens(turns),
+        "approx_tokens": approx_tokens(turns),
         "segments": turns,
         "media_fetched": False,
     }

@@ -5,7 +5,8 @@ import json
 from typing import Any
 
 from .public import PublicShareClient
-from .render import iso_timestamp, render_conversation
+from .render import render_conversation
+from .transcript import iso_timestamp
 from .service import read_page
 from .targets import Target, is_chatgpt_target, normalize_options, parse_target
 from .transport import ChatGPTClient
