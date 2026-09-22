@@ -14,7 +14,10 @@ from .session import ORG_ENV, SESSION_ENV, Session, load_session
 ORIGIN = "https://claude.ai"
 MAX_BYTES = 64 * 1024 * 1024
 _UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
-_ALLOWED = re.compile(rf"/api/organizations/{_UUID}/(?:chat_conversations/{_UUID}|chat_conversations_v2)")
+_ALLOWED = re.compile(
+    rf"/api/organizations/{_UUID}/(?:chat_conversations/{_UUID}|chat_conversations_v2|conversation/search/v2)"
+)
+SNIPPET_CHARS = 200
 
 
 class ClaudeClient:
@@ -58,6 +61,12 @@ class ClaudeClient:
             f"/api/organizations/{self.organization}/chat_conversations_v2",
             {"limit": limit, "offset": offset, "consistency": "eventual"},
         )
+
+    def search(self, query: str, *, limit: int, project: str | None = None) -> dict:
+        params = {"query": query, "n": limit, "target_snippet_size": SNIPPET_CHARS}
+        if project:
+            params["project_uuid"] = project
+        return self.get(f"/api/organizations/{self.organization}/conversation/search/v2", params)
 
     def get(self, path: str, params: dict | None = None) -> dict:
         if not _ALLOWED.fullmatch(path):

@@ -107,3 +107,17 @@ def test_cli_options_become_overrides():
     plugin.register_cli_options("cat", cat)
     result = CliRunner().invoke(cat, ["--claude-tool", "t3", "--claude-result-head-tokens", "40"])
     assert json.loads(result.output) == {"tool": "t3", "result_head_tokens": 40}
+
+
+def test_search_renders_snippets_and_continuation(fake_client, monkeypatch):
+    def search(self, query, *, limit, project=None):
+        self.calls.append(("search", query, limit, project))
+        return {"data": [{"conversation": {"uuid": CONVERSATION, "name": "Runtime check"},
+                          "matched_snippet": {"text": "…the runtime\nregistry…"}}] * limit}
+
+    monkeypatch.setattr(fake_client, "search", search, raising=False)
+    item, = plugin.resolve("claude:search?query=runtime&limit=1", {})
+    assert item["content"].startswith("# claude.ai search: runtime")
+    assert f"- Runtime check — claude:chat/{CONVERSATION}\n  …the runtime registry…" in item["content"]
+    assert "Continue: claude:search?limit=1&offset=1&query=runtime" in item["content"]
+    assert fake_client.calls == [("search", "runtime", 1, None)]

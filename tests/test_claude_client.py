@@ -88,3 +88,12 @@ def test_challenge_pages_are_distinguished():
 def test_missing_organization_is_explicit():
     with pytest.raises(TransportError, match="CX_CLAUDE_ORG"):
         client(FakeOpener(), organization=None).conversation(ID)
+
+
+def test_search_request_names_query_size_and_project():
+    opener = FakeOpener(b'{"data": []}')
+    client(opener).search("mcp debugging", limit=20, project="66666666-6666-4666-8666-666666666666")
+    assert opener.requests[0].full_url == (
+        f"https://claude.ai/api/organizations/{ORG}/conversation/search/v2"
+        "?query=mcp+debugging&n=20&target_snippet_size=200&project_uuid=66666666-6666-4666-8666-666666666666"
+    )

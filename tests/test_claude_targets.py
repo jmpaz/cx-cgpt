@@ -46,3 +46,19 @@ def test_tool_and_preview_options_apply_to_chats():
 def test_invalid_targets_fail_explicitly(raw, message):
     with pytest.raises(ValueError, match=message):
         parse_target(raw)
+
+
+def test_search_requires_query_and_accepts_project_scope():
+    target = parse_target("claude:search?query=mcp+debugging&project=66666666-6666-4666-8666-666666666666&limit=150")
+    assert target.kind == "search"
+    assert target.options == {"query": "mcp debugging", "project": "66666666-6666-4666-8666-666666666666", "limit": 150}
+    assert target.canonical == (
+        "claude:search?limit=150&project=66666666-6666-4666-8666-666666666666&query=mcp+debugging"
+    )
+    with pytest.raises(ValueError, match="requires query"):
+        parse_target("claude:search")
+    with pytest.raises(ValueError, match="at most 200"):
+        parse_target("claude:search?query=x&limit=201")
+    with pytest.raises(ValueError, match="project UUID"):
+        parse_target("claude:search?query=x&project=abc")
+    assert parse_target("claude:search?query=x", {"limit": 150}).options["limit"] == 150

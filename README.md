@@ -3,9 +3,9 @@
 [contextualize](https://github.com/jmpaz/contextualize) source plugins for
 ChatGPT and claude.ai conversations. The `chatgpt` source reads private history
 through the local Codex login, plus public share snapshots, history search, and
-recent-history listings. The `claude` source reads claude.ai chats and chat
-listings through your Chrome sign-in; see [claude.ai](#claudeai). Both run on
-macOS and Linux.
+recent-history listings. The `claude` source reads claude.ai chats, chat
+listings, and search through your Chrome sign-in; see [claude.ai](#claudeai).
+Both run on macOS and Linux.
 
 ## Install
 
@@ -197,7 +197,7 @@ they happened.
 contextualize cat 'https://claude.ai/chat/<conversation-id>'
 contextualize cat 'claude:chat/<conversation-id>?tool=t3'
 contextualize cat --list --json 'claude:chats?limit=20'
-contextualize cat 'claude:chats?after=2026-09-01'
+contextualize cat 'claude:search?query=mcp+debugging&after=2026-09-01'
 ```
 
 ### Session
@@ -220,7 +220,7 @@ again.
 claude.ai rejects OAuth tokens on these endpoints, including Claude Code's, so
 a browser session is the only credential that works. That session can do
 anything you can do on claude.ai; the plugin only sends GET requests to the
-conversation and listing endpoints. Those are claude.ai's internal web
+conversation, listing, and search endpoints. Those are claude.ai's internal web
 endpoints, not a published API, and they can change without notice.
 
 ### Transcripts
@@ -250,17 +250,25 @@ Metadata follows the ChatGPT source: `segments` (one per turn, with `index`,
 call's handle, name, integration, MCP server URL, and error flag. `reasoning`
 is `"summaries"` when claude.ai hid the thinking.
 
-### Listing
+### Listing and search
 
 `claude:chats` lists chats most recently updated first. `limit` defaults to 20
 (maximum 100) and `offset` pages through the rest. `after` and `before` filter
 on `updated_at` the same way the ChatGPT listing does. To continue, follow the
-`Continue:` line or `next_target`. Search is not supported yet.
+`Continue:` line or `next_target`.
 
-CLI flags `--claude-tool`, `--claude-limit`, `--claude-offset`,
-`--claude-after`, `--claude-before`, `--claude-output`,
-`--claude-result-head-tokens`, and `--claude-result-tail-tokens` override
-target options. Manifest configuration uses the `claude` provider key.
+`claude:search?query=...` uses claude.ai's own chat search, which matches both
+keywords and meaning. Results arrive ranked, each with the matched snippet.
+`project=<uuid>` limits a search to one project. claude.ai returns at most 200
+matches for a query, so `limit` (default 20, maximum 200) and `offset` page
+within those, and the output says when that ceiling was reached. `after` and
+`before` filter those matches by `updated_at`.
+
+CLI flags `--claude-query`, `--claude-project`, `--claude-tool`,
+`--claude-limit`, `--claude-offset`, `--claude-after`, `--claude-before`,
+`--claude-output`, `--claude-result-head-tokens`, and
+`--claude-result-tail-tokens` override target options. Manifest configuration
+uses the `claude` provider key.
 
 ## Troubleshooting
 
@@ -300,7 +308,7 @@ for every account or future Codex/backend release. A global contextualize
 installation is separate from testing a source checkout: verify discovery with
 `contextualize plugins` after installing into your chosen environment.
 
-claude.ai chat reads and listings have been exercised against the live service
+claude.ai chat reads, listings, and search have been exercised against the live service
 on Linux with Google Chrome 149. The macOS Keychain path is covered by tests
 only.
 

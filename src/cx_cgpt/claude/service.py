@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from ..service import timestamp
-from .targets import Target
+from .targets import SEARCH_LIMIT, Target
 
 MAX_PAGES = 25
 FILTERED_PAGE_SIZE = 50
@@ -67,4 +67,50 @@ def read_page(client: Any, target: Target) -> dict:
         "scan_limit_reached": pages == MAX_PAGES and len(selected) < limit and more,
         "date_field": "updated_at", "date_filter": "inclusive after, exclusive before; UTC for dates",
         "source_order": "updated descending",
+    }
+
+
+def _search_rows(page: Any) -> list[dict]:
+    rows = page.get("data") if isinstance(page, dict) else None
+    if not isinstance(rows, list) or any(
+        not isinstance(row, dict) or not isinstance(row.get("conversation"), dict) for row in rows
+    ):
+        raise ValueError("claude.ai returned an unsupported search page")
+    for row in rows:
+        try:
+            UUID(row["conversation"].get("uuid"))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError("claude.ai search result has no valid conversation ID") from exc
+    return rows
+
+
+def read_search(client: Any, target: Target) -> dict:
+    options = target.options
+    limit, offset = options.get("limit", 20), options.get("offset", 0)
+    after, before = timestamp(options.get("after")), timestamp(options.get("before"))
+    if after is not None and before is not None and after >= before:
+        raise ValueError("after must be earlier than before")
+    filtered = after is not None or before is not None
+    requested = SEARCH_LIMIT if filtered else min(SEARCH_LIMIT, offset + limit)
+    page = client.search(options["query"], limit=requested, project=options.get("project"))
+    rows = _search_rows(page)
+    matches = [
+        {**row["conversation"], "rank": rank, "snippet": (row.get("matched_snippet") or {}).get("text")}
+        for rank, row in enumerate(rows)
+        if _matches(row["conversation"], after, before)
+    ]
+    items = matches[offset: offset + limit]
+    end = offset + len(items)
+    exhaustive = len(rows) < requested
+    more = len(matches) > end or (not exhaustive and requested < SEARCH_LIMIT)
+    return {
+        "items": items, "offset": offset, "limit": limit, "returned": len(items), "scanned": len(rows),
+        "requested": requested, "exhaustive": exhaustive,
+        "server_limit_reached": not exhaustive and requested == SEARCH_LIMIT, "pages": 1,
+        "next_offset": end if more else None,
+        "next_target": Target("search", None, {**options, "offset": end}).canonical if more else None,
+        "scan_limit_reached": False,
+        "search_id": page.get("search_id"), "executed_mode": page.get("executed_mode"),
+        "date_field": "updated_at", "date_filter": "inclusive after, exclusive before; UTC for dates",
+        "source_order": "server search rank",
     }

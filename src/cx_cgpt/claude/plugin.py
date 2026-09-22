@@ -7,7 +7,7 @@ from typing import Any
 from ..transcript import iso_timestamp
 from .client import ClaudeClient
 from .render import HEAD_TOKENS, TAIL_TOKENS, render_conversation, render_tool
-from .service import read_page
+from .service import read_page, read_search
 from .targets import Target, is_claude_target, normalize_options, parse_target
 
 PLUGIN_API_VERSION = "1"
@@ -15,7 +15,10 @@ PLUGIN_NAME = "claude"
 PLUGIN_PRIORITY = 100
 PLUGIN_KIND = "source"
 
-_CLI_OPTIONS = ("after", "before", "limit", "offset", "output", "tool", "result_head_tokens", "result_tail_tokens")
+_CLI_OPTIONS = (
+    "query", "project", "after", "before", "limit", "offset", "output", "tool",
+    "result_head_tokens", "result_tail_tokens",
+)
 
 
 def can_resolve(target: str, context: dict[str, Any]) -> bool:
@@ -61,6 +64,31 @@ def _entry(item: dict) -> dict:
     }
 
 
+def _read(client: ClaudeClient, target: Target) -> dict:
+    return read_search(client, target) if target.kind == "search" else read_page(client, target)
+
+
+def _listing(target: Target, page: dict) -> str:
+    heading = f"claude.ai search: {target.options['query']}" if target.kind == "search" else "claude.ai chats"
+    lines = [f"# {heading.replace(chr(10), ' ')}", ""]
+    for item in page["items"]:
+        entry = _entry(item)
+        lines.append(f"- {str(entry['label']).replace(chr(10), ' ')} — {entry['target']}")
+        snippet = item.get("snippet")
+        if isinstance(snippet, str) and snippet.strip():
+            lines.append("  " + " ".join(snippet.split()))
+    lines.extend(["", f"Returned {page['returned']} chats; scanned {page['scanned']} entries."])
+    if page["next_target"]:
+        lines.extend(["", f"Continue: {page['next_target']}"])
+    if page["scan_limit_reached"]:
+        lines.extend(["", "Scan limit reached; more history remains."])
+    if page.get("server_limit_reached"):
+        lines.extend(["", "claude.ai returns at most 200 matches; narrow the query or scope it to a project for others."])
+    if "after" in target.options or "before" in target.options:
+        lines.extend(["", "Dates filter updated_at: after is inclusive; before is exclusive; dates use UTC."])
+    return "\n".join(lines) + "\n"
+
+
 def list_targets(target: str, context: dict) -> dict:
     parsed = _parse(target, context)
     if parsed.kind == "chat":
@@ -70,9 +98,9 @@ def list_targets(target: str, context: dict) -> dict:
         key: context[name] for name, key in (("list_limit", "limit"), ("list_offset", "offset"))
         if context.get(name) is not None
     }
-    parsed = Target("chats", None, normalize_options({**parsed.options, **overrides}, "chats"))
+    parsed = Target(parsed.kind, None, normalize_options({**parsed.options, **overrides}, parsed.kind))
     with ClaudeClient() as client:
-        page = read_page(client, parsed)
+        page = _read(client, parsed)
     return {
         "targets": [_entry(item) for item in page["items"]],
         "summary": {key: value for key, value in page.items() if key != "items"},
@@ -110,18 +138,8 @@ def resolve(target: str, context: dict) -> list[dict]:
                 key = parsed.conversation_id
             metadata["source_url"] = f"https://claude.ai/chat/{parsed.conversation_id}"
         else:
-            payload = read_page(client, parsed)
-            entries = [_entry(item) for item in payload["items"]]
-            content = "# claude.ai chats\n\n" + "\n".join(
-                f"- {str(entry['label']).replace(chr(10), ' ')} — {entry['target']}" for entry in entries
-            )
-            content += f"\n\nReturned {len(entries)} chats; scanned {payload['scanned']} entries.\n"
-            if payload["next_target"]:
-                content += f"\nContinue: {payload['next_target']}\n"
-            if payload["scan_limit_reached"]:
-                content += "\nScan limit reached; more history remains.\n"
-            if "after" in options or "before" in options:
-                content += "\nDates filter updated_at: after is inclusive; before is exclusive; dates use UTC.\n"
+            payload = _read(client, parsed)
+            content = _listing(parsed, payload)
             metadata = {key: value for key, value in payload.items() if key != "items"}
             prose, authors = "", []
             key = hashlib.sha256(parsed.canonical.encode()).hexdigest()[:24]

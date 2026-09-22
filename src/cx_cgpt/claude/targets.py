@@ -10,7 +10,9 @@ from uuid import UUID
 _OPTIONS = {
     "chat": {"output", "tool", "result_head_tokens", "result_tail_tokens"},
     "chats": {"after", "before", "limit", "offset", "output"},
+    "search": {"query", "project", "after", "before", "limit", "offset", "output"},
 }
+SEARCH_LIMIT = 200
 _INTEGERS = {"limit": 1, "offset": 0, "result_head_tokens": 0, "result_tail_tokens": 0}
 _DATE = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2}))?\Z"
@@ -26,7 +28,7 @@ class Target:
 
     @property
     def canonical(self) -> str:
-        body = f"chat/{self.conversation_id}" if self.kind == "chat" else "chats"
+        body = f"chat/{self.conversation_id}" if self.kind == "chat" else self.kind
         query = urlencode(sorted(self.options.items()))
         return f"claude:{body}" + (f"?{query}" if query else "")
 
@@ -66,8 +68,16 @@ def normalize_options(raw: dict[str, Any] | None, kind: str | None = None) -> di
             raise ValueError(f"{key} must be an integer") from exc
         if options[key] < minimum:
             raise ValueError(f"{key} must be at least {minimum}")
-    if options.get("limit", 1) > 100:
-        raise ValueError("limit must be at most 100")
+    most = 100 if kind == "chats" else SEARCH_LIMIT
+    if options.get("limit", 1) > most:
+        raise ValueError(f"limit must be at most {most}")
+    if "query" in options and (not isinstance(options["query"], str) or not options["query"].strip()):
+        raise ValueError("query must be nonempty text")
+    if "project" in options:
+        try:
+            options["project"] = str(UUID(str(options["project"])))
+        except ValueError as exc:
+            raise ValueError("project must be a claude.ai project UUID") from exc
     for key in ("after", "before"):
         if key not in options:
             continue
@@ -97,8 +107,8 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
     else:
         body, _, query = raw.removeprefix("claude:").partition("?")
         body = body.strip("/")
-    if body == "chats":
-        kind, identifier = "chats", None
+    if body in ("chats", "search"):
+        kind, identifier = body, None
     else:
         kind = "chat"
         try:
@@ -109,4 +119,6 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
     if len(dict(pairs)) != len(pairs):
         raise ValueError("Duplicate claude query options are not supported")
     options = normalize_options({**dict(pairs), **normalize_options(overrides)}, kind)
+    if kind == "search" and "query" not in options:
+        raise ValueError("claude search requires query")
     return Target(kind, identifier, options)
