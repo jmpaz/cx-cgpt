@@ -18,7 +18,9 @@ from ..tools import (
     select,
     tools_note,
 )
+from ..query import with_query
 from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+from ..variants import Message, Tree, header_lines, note_lines, render_map
 from .files import uploads
 
 ROOT_PARENT = "00000000-0000-4000-8000-000000000000"
@@ -207,27 +209,64 @@ def _incomplete(issues: list[str]) -> list[str]:
     return ["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""] if issues else []
 
 
-def _heading(role: str, message: dict[str, Any], started: str | None) -> str:
+def _qualifier(role: str, message: dict[str, Any]) -> str | None:
     qualifiers = {"speech_input": "dictated"} if role == "user" else {"retry": "regenerated"}
-    qualifier = qualifiers.get(message.get("input_mode"))
+    return qualifiers.get(message.get("input_mode"))
+
+
+def _heading(role: str, message: dict[str, Any], started: str | None) -> str:
+    qualifier = _qualifier(role, message)
     return "## " + " · ".join([label(role), *([qualifier] if qualifier else []), *([started] if started else [])])
+
+
+def variant_tree(payload: dict[str, Any]) -> Tree:
+    messages = []
+    for message in payload.get("chat_messages") or []:
+        if not isinstance(message, dict) or not isinstance(message.get("uuid"), str):
+            continue
+        role = "user" if message.get("sender") == "human" else "assistant"
+        said = [block["text"].strip() for block in _blocks(message)
+                if block.get("type") == "text" and isinstance(block.get("text"), str) and block["text"].strip()]
+        fallback = message.get("text") if isinstance(message.get("text"), str) else ""
+        messages.append(Message(
+            message["uuid"], message.get("parent_message_uuid"), role, iso_timestamp(message.get("created_at")),
+            "\n\n".join(said) or fallback.strip(), qualifier=_qualifier(role, message),
+        ))
+    return Tree(messages, payload.get("current_leaf_message_uuid"))
+
+
+def variant_payload(payload: dict[str, Any], variant: str | None) -> dict[str, Any]:
+    if not variant:
+        return payload
+    return {**payload, "current_leaf_message_uuid": variant_tree(payload).leaf_for(variant)}
+
+
+def render_chat_map(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    tree = variant_tree(payload)
+    title = payload.get("name") or "Untitled chat"
+    text = render_map(tree, title, f"claude:chat/{payload.get('uuid')}")
+    return text, {"conversation_id": payload.get("uuid"), "title": title, "variants": tree.summary()}
 
 
 def render_conversation(
     payload: dict[str, Any], *, attach_files: bool = False, outputs: Sequence[ChatFile] = (),
-    outputs_problem: str | None = None, tools: str = "lines",
+    outputs_problem: str | None = None, tools: str = "lines", variants: str = "notes", variant: str | None = None,
     head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
 ) -> tuple[str, dict[str, Any], str, list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("claude.ai conversation payload must be an object")
+    tree = variant_tree(payload)
+    payload = variant_payload(payload, variant)
     branch, issues = active_branch(payload)
+    forks = tree.forks_on([message.get("uuid") for message in branch]) if variants != "none" else {}
     files = [*uploads(branch), *outputs] if attach_files else []
     attached = iter(files) if attach_files else None
     calls = tool_calls(branch)
     call_for = {id(call.use if call.use is not None else call.result): call for call in calls}
     shared = {call.handle: call.shared() for call in calls}
     identifier = payload.get("uuid")
-    target = f"claude:chat/{identifier}" if identifier else None
+    base = f"claude:chat/{identifier}" if identifier else None
+    target = with_query(base, f"variant={variant}") if base and variant else base
     title = payload.get("name") or "Untitled chat"
     created = iso_timestamp(payload.get("created_at"))
     modified = iso_timestamp(payload.get("updated_at"))
@@ -241,7 +280,9 @@ def render_conversation(
                         ("Project", payload.get("project_uuid"))):
         if value:
             lines.extend([f"{name}: {label(value)}", ""])
-    lines.extend(["Branch: active path to the current leaf; alternative branches are not rendered.", ""])
+    if not variant:
+        lines.extend(["Branch: active path to the current leaf; alternative branches are not rendered.", ""])
+    lines.extend(header_lines(tree, base, variant))
     summarized = any(
         block.get("type") == "thinking" and all(_thinking(block))
         for message in branch for block in _blocks(message)
@@ -261,6 +302,8 @@ def render_conversation(
         started = iso_timestamp(blocks[0].get("start_timestamp")) if blocks else None
         started = started or iso_timestamp(message.get("created_at"))
         lines.extend([_heading(role, message, started), ""])
+        if message.get("uuid") in forks:
+            lines.extend(note_lines(forks[message["uuid"]], message["uuid"], variants))
         turn_calls: list[Call] = []
         summary_at = None
         provenance.append({
@@ -296,7 +339,7 @@ def render_conversation(
                 if call is not None:
                     turn_calls.append(shared[call.handle])
                     summary_at = len(lines) if summary_at is None else summary_at
-                    full = f"{target}?tool={call.handle}" if target else None
+                    full = with_query(target, f"tool={call.handle}") if target else None
                     if tools == "lines":
                         lines.extend([call_line(shared[call.handle]), ""])
                     elif tools == "preview":
@@ -345,18 +388,21 @@ def render_conversation(
         "media_fetched": False,
         "files_mode": "attach" if attach_files else "inline",
         "files": [file_summary(file) for file in files],
+        "variant": variant,
+        "variants": tree.summary(),
     }
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors
 
 
 def render_tools(payload: dict[str, Any], spec: str, *, offset: int = 0,
-                 tokens: int | None = None) -> tuple[str, dict[str, Any]]:
-    branch, issues = active_branch(payload)
+                 tokens: int | None = None, variant: str | None = None) -> tuple[str, dict[str, Any]]:
+    branch, issues = active_branch(variant_payload(payload, variant))
     chosen = [call.shared() for call in select(tool_calls(branch), spec)]
     identifier = payload.get("uuid")
     title = payload.get("name") or "Untitled chat"
-    lines = [render_calls(title, "claude.ai conversation", f"claude:chat/{identifier}", chosen,
-                          offset=offset, tokens=tokens)]
+    target = f"claude:chat/{identifier}"
+    lines = [render_calls(title, "claude.ai conversation", with_query(target, f"variant={variant}") if variant else target,
+                          chosen, offset=offset, tokens=tokens)]
     lines.extend(_incomplete(issues))
     single = chosen[0] if len(chosen) == 1 else None
     metadata = {

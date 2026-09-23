@@ -10,7 +10,8 @@ from .client import ClaudeClient
 from ..files import ChatFile, file_document
 from .files import outputs, uploads
 from ..tools import HEAD_TOKENS, TAIL_TOKENS, TOOL_MODES
-from .render import active_branch, render_conversation, render_tools
+from ..variants import VARIANT_MODES
+from .render import active_branch, render_chat_map, render_conversation, render_tools, variant_payload
 from .service import read_page, read_search
 from .targets import Target, is_claude_target, normalize_options, parse_target
 
@@ -21,7 +22,7 @@ PLUGIN_KIND = "source"
 
 _CLI_OPTIONS = (
     "query", "project", "after", "before", "limit", "offset", "output", "tool", "tools", "file", "files",
-    "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens",
+    "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens", "variant", "variants", "map",
 )
 
 
@@ -151,25 +152,30 @@ def _read_chat(client: ClaudeClient, parsed: Target) -> tuple[list[dict], dict]:
     returned = payload.get("uuid")
     if returned is not None and returned != identifier:
         raise ValueError("claude.ai returned a different conversation ID")
+    view = variant_payload(payload, options.get("variant"))
     if "file" in options:
-        return [_file_document(identifier, _chat_file(client, payload, identifier, options["file"]))], payload
+        return [_file_document(identifier, _chat_file(client, view, identifier, options["file"]))], payload
     files: list[ChatFile] = []
-    if "tool" in options:
-        content, metadata = render_tools(payload, options["tool"], offset=options.get("result_offset", 0),
-                                         tokens=options.get("result_tokens"))
+    key = identifier + "".join(f"/{options[name]}" for name in ("variant", "tool") if name in options)
+    if "map" in options:
+        content, metadata = render_chat_map(payload)
         prose, authors = "", []
-        key = f"{identifier}/{options['tool']}"
+        key = f"{identifier}/map"
+    elif "tool" in options:
+        content, metadata = render_tools(payload, options["tool"], offset=options.get("result_offset", 0),
+                                         tokens=options.get("result_tokens"), variant=options.get("variant"))
+        prose, authors = "", []
     else:
         attach = options.get("files", "attach") == "attach"
         found, problem = _outputs(client, identifier) if attach else ([], None)
         content, metadata, prose, authors = render_conversation(
             payload, attach_files=attach, outputs=found, outputs_problem=problem,
-            tools=options.get("tools", "lines"),
+            tools=options.get("tools", "lines"), variants=options.get("variants", "notes"),
+            variant=options.get("variant"),
             head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
             tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS),
         )
-        files = [*uploads(active_branch(payload)[0]), *found] if attach else []
-        key = identifier
+        files = [*uploads(active_branch(view)[0]), *found] if attach else []
     metadata["source_url"] = f"https://claude.ai/chat/{identifier}"
     transcript = {
         "source": parsed.canonical, "label": metadata.get("title") or parsed.canonical,
@@ -220,10 +226,15 @@ def register_cli_options(command_name: str, command: Any) -> None:
         flag = "--claude-" + name.replace("_", "-")
         if flag in existing:
             continue
+        if name == "map":
+            command.params.append(click.Option([flag, "claude_map"], is_flag=True, default=False,
+                                               help="Outline every version of a claude.ai chat."))
+            continue
         option_type = (
             click.Choice(["transcript", "json"]) if name == "output"
             else click.Choice(["attach", "inline"]) if name == "files"
             else click.Choice(list(TOOL_MODES)) if name == "tools"
+            else click.Choice(list(VARIANT_MODES)) if name == "variants"
             else int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens",
                                  "result_offset", "result_tokens"} else str
         )
@@ -234,6 +245,5 @@ def register_cli_options(command_name: str, command: Any) -> None:
 def collect_cli_overrides(command_name: str, params: dict) -> dict | None:
     if command_name not in {"cat", "hydrate", "payload"}:
         return None
-    return {
-        key: params[f"claude_{key}"] for key in _CLI_OPTIONS if params.get(f"claude_{key}") is not None
-    } or None
+    values = {key: params.get(f"claude_{key}") for key in _CLI_OPTIONS}
+    return {key: value for key, value in values.items() if value is not None and value is not False} or None

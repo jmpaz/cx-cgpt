@@ -9,7 +9,8 @@ from ..tools import HEAD_TOKENS, TAIL_TOKENS, TOOL_MODES
 from ..transcript import iso_timestamp
 from .files import outputs, uploads
 from .public import PublicShareClient
-from .render import render_conversation, render_tools
+from ..variants import VARIANT_MODES
+from .render import render_conversation, render_conversation_map, render_tools, variant_payload
 from .service import read_page
 from .targets import Target, is_chatgpt_target, normalize_options, parse_target
 from .transport import ChatGPTClient
@@ -21,7 +22,7 @@ PLUGIN_KIND = "source"
 
 _CLI_OPTIONS = (
     "query", "after", "before", "limit", "offset", "cursor", "output", "file", "files", "tool", "tools",
-    "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens",
+    "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens", "variant", "variants", "map",
 )
 _INTEGER_OPTIONS = {"limit", "offset", "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens"}
 
@@ -116,18 +117,23 @@ def _conversation_file(client: ChatGPTClient, payload: dict, conversation_id: st
     return found[0]
 
 
-def _render(payload: dict, parsed: Target, base: str, **files: Any) -> tuple[str, dict, str, list[str], str | None]:
+def _render(payload: dict, parsed: Target, base: str, **files: Any) -> tuple[str, dict, str, list[str], str]:
     options = parsed.options
+    if "map" in options:
+        content, metadata = render_conversation_map(payload, base)
+        return content, metadata, "", [], "/map"
+    part = "".join(f"/{options[name]}" for name in ("variant", "tool") if name in options)
     if "tool" in options:
-        content, metadata = render_tools(payload, options["tool"], target=base,
+        content, metadata = render_tools(payload, options["tool"], target=base, variant=options.get("variant"),
                                          offset=options.get("result_offset", 0), tokens=options.get("result_tokens"))
-        return content, metadata, "", [], options["tool"]
+        return content, metadata, "", [], part
     content, metadata, prose, authors = render_conversation(
         payload, tools=options.get("tools", "lines"), target=base,
+        variants=options.get("variants", "notes"), variant=options.get("variant"),
         head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
         tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS), **files,
     )
-    return content, metadata, prose, authors, None
+    return content, metadata, prose, authors, part
 
 
 def resolve(target: str, context: dict) -> list[dict]:
@@ -139,7 +145,7 @@ def resolve(target: str, context: dict) -> list[dict]:
         if parsed.kind == "share":
             payload = client.get(parsed.share_id)
             base = Target("share", None, {}, parsed.share_id).canonical
-            content, metadata, prose, authors, tool = _render(payload, parsed, base)
+            content, metadata, prose, authors, part = _render(payload, parsed, base)
             content = "Published share snapshot; completeness refers only to this snapshot, not the private conversation.\n\n" + content
             metadata.update({
                 "share_id": parsed.share_id, "authentication": "none",
@@ -147,23 +153,25 @@ def resolve(target: str, context: dict) -> list[dict]:
                 "capture_scope": "published_share_snapshot",
                 "backing_conversation_id": payload.get("backing_conversation_id"),
             })
-            key = f"shares/{parsed.share_id}" + (f"/{tool}" if tool else "")
+            key = f"shares/{parsed.share_id}{part}"
         elif parsed.kind == "thread":
             payload = client.get(f"/conversation/{parsed.conversation_id}")
             returned_id = payload.get("conversation_id", payload.get("id"))
             if returned_id is not None and returned_id != parsed.conversation_id:
                 raise ValueError("ChatGPT returned a different conversation ID")
             payload = {**payload, "conversation_id": parsed.conversation_id}
+            view = variant_payload(payload, parsed.options.get("variant"))
             if "file" in parsed.options:
-                wanted = _conversation_file(client, payload, parsed.conversation_id, parsed.options["file"])
+                wanted = _conversation_file(client, view, parsed.conversation_id, parsed.options["file"])
                 return [_file_document(parsed.conversation_id, wanted)]
-            attach = parsed.options.get("files", "attach") == "attach" and "tool" not in parsed.options
+            attach = (parsed.options.get("files", "attach") == "attach"
+                      and not parsed.options.keys() & {"tool", "map"})
             files = [
-                *uploads(client, payload, parsed.conversation_id), *outputs(client, payload, parsed.conversation_id),
+                *uploads(client, view, parsed.conversation_id), *outputs(client, view, parsed.conversation_id),
             ] if attach else []
             base = Target("thread", parsed.conversation_id, {}).canonical
-            content, metadata, prose, authors, tool = _render(payload, parsed, base, attach_files=attach, files=files)
-            key = parsed.conversation_id + (f"/{tool}" if tool else "")
+            content, metadata, prose, authors, part = _render(payload, parsed, base, attach_files=attach, files=files)
+            key = parsed.conversation_id + part
         else:
             payload = read_page(client, parsed)
             entries = [_entry(item) for item in payload["items"]]
@@ -207,10 +215,15 @@ def register_cli_options(command_name: str, command: Any) -> None:
         flag = f"--chatgpt-{name}"
         if flag in existing:
             continue
+        if name == "map":
+            command.params.append(click.Option([flag], is_flag=True, default=False,
+                                               help="Outline every version of a ChatGPT conversation."))
+            continue
         option_type = (
             click.Choice(["transcript", "json"]) if name == "output"
             else click.Choice(["attach", "inline"]) if name == "files"
             else click.Choice(list(TOOL_MODES)) if name == "tools"
+            else click.Choice(list(VARIANT_MODES)) if name == "variants"
             else int if name in _INTEGER_OPTIONS else str
         )
         command.params.append(click.Option([flag], type=option_type, default=None, help=f"ChatGPT {name}; see cx-chats README."))
@@ -219,6 +232,5 @@ def register_cli_options(command_name: str, command: Any) -> None:
 def collect_cli_overrides(command_name: str, params: dict) -> dict | None:
     if command_name not in {"cat", "hydrate", "payload"}:
         return None
-    return {
-        key: params[f"chatgpt_{key}"] for key in _CLI_OPTIONS if params.get(f"chatgpt_{key}") is not None
-    } or None
+    values = {key: params.get(f"chatgpt_{key}") for key in _CLI_OPTIONS}
+    return {key: value for key, value in values.items() if value is not None and value is not False} or None

@@ -46,8 +46,8 @@ Custom GPT `/g/` or gizmo URLs are not supported; use a supported
 `/c/<conversation-id>` address for an accessible private conversation.
 
 `chatgpt:UUID` is also accepted. A transcript follows `current_node` back
-through its ancestors: the selected branch, not an interleaving of alternative
-responses. Each turn has one heading: `## user · <time>`, marked `dictated`
+through its ancestors: the selected branch, with other versions noted where
+they meet it (see [Variants](#variants)). Each turn has one heading: `## user · <time>`, marked `dictated`
 when the message was dictated, and `## assistant · <model> · <time>`, naming
 the model that wrote that reply. Within a turn come thought summaries as `>`
 quotes, commentary, tool calls, and the reply. Citations become their links and
@@ -106,6 +106,28 @@ was included.
 
 `?file=<path>` reads one of them. `?files=inline` returns the transcript alone,
 with its links unchanged and no files fetched.
+
+### Variants
+
+Regenerating a reply or editing a message leaves another version beside the
+old one. The transcript notes each place where its branch meets another version:
+
+```text
+## assistant · gpt-5 · 2026-09-22T19:59:30Z
+
+⑂ version v4 of this reply; others: v3 (gpt-5, 2026-09-22T19:59:22Z)
+```
+
+- `?variant=v3` renders that version and its latest continuation. Tool calls
+  and files follow it, so `?variant=v3&tool=t2` reads a call on that branch.
+- `?map` outlines every version, one line per turn, with `●` marking the
+  selected branch.
+- `?variants=preview` quotes the opening of each other version under its note;
+  `?variants=none` leaves the notes out.
+
+Handles count forks in conversation order, so a new version of an earlier
+message renumbers the handles after it. `metadata.variants` lists each fork
+with its versions' handles, message IDs, times, and models.
 
 ## Read a public share
 
@@ -185,9 +207,8 @@ backend may use it as a pagination bound rather than an exact history count;
 count of date matches. Searches do not
 invent a total count.
 
-CLI equivalents `--chatgpt-query`, `--chatgpt-after`, `--chatgpt-before`,
-`--chatgpt-limit`, `--chatgpt-offset`, `--chatgpt-cursor`, `--chatgpt-output`,
-`--chatgpt-file`, and `--chatgpt-files` override target options. Manifest
+Each target option has a CLI flag, such as `--chatgpt-query` or
+`--chatgpt-map`, that overrides it. Manifest
 configuration uses the `chatgpt` provider key. Unknown or inapplicable options
 are rejected.
 
@@ -259,8 +280,10 @@ endpoints, not a published API, and they can change without notice.
 
 ### Transcripts
 
-A chat renders its active branch: the path to the current message, without the
-alternatives left behind by retries and edits. Within an assistant turn:
+A chat renders its active branch: the path to the current message, with the
+versions left by retries and edits noted where they meet it. The variant
+options are the ChatGPT source's; see [Variants](#variants). Within an
+assistant turn:
 
 - Thinking appears as `>` quotes. claude.ai returns only summaries of hidden
   thinking, and the transcript header says when that is all there is.
@@ -282,7 +305,8 @@ Metadata follows the ChatGPT source: `segments` (one per turn, with `index`,
 `role`, `text`, `start_time`, and `tools`), `message_count`, `approx_tokens`,
 `model`, `source_created`, and `source_modified`. `tool_calls` lists each
 call's handle, name, integration, MCP server URL, and error flag. `reasoning`
-is `"summaries"` when claude.ai hid the thinking. `files` lists each file with
+is `"summaries"` when claude.ai hid the thinking. `variants` lists each fork.
+`files` lists each file with
 its path, origin, type, size, and whether it was included.
 
 ### Files
@@ -312,10 +336,8 @@ matches for a query, so `limit` (default 20, maximum 200) and `offset` page
 within those, and the output says when that ceiling was reached. `after` and
 `before` filter those matches by `updated_at`.
 
-CLI flags `--claude-query`, `--claude-project`, `--claude-tool`,
-`--claude-limit`, `--claude-offset`, `--claude-after`, `--claude-before`,
-`--claude-output`, `--claude-result-head-tokens`, and
-`--claude-result-tail-tokens` override target options. Manifest configuration
+Each target option has a CLI flag, such as `--claude-query` or `--claude-map`,
+that overrides it. Manifest configuration
 uses the `claude` provider key.
 
 ## Troubleshooting

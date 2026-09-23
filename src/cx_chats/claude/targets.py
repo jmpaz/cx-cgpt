@@ -4,14 +4,16 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import urlsplit
 from uuid import UUID
 
+from ..query import query_pairs, query_string
 from ..tools import TOOL_MODES, valid_handles
+from ..variants import VARIANT_MODES, valid_variant
 
 _OPTIONS = {
     "chat": {"output", "tool", "tools", "file", "files", "result_head_tokens", "result_tail_tokens",
-             "result_offset", "result_tokens"},
+             "result_offset", "result_tokens", "variant", "variants", "map"},
     "chats": {"after", "before", "limit", "offset", "output"},
     "search": {"query", "project", "after", "before", "limit", "offset", "output"},
 }
@@ -32,7 +34,7 @@ class Target:
     @property
     def canonical(self) -> str:
         body = f"chat/{self.conversation_id}" if self.kind == "chat" else self.kind
-        query = urlencode(sorted(self.options.items()))
+        query = query_string(self.options)
         return f"claude:{body}" + (f"?{query}" if query else "")
 
 
@@ -102,6 +104,16 @@ def normalize_options(raw: dict[str, Any] | None, kind: str | None = None) -> di
     if "file" in options and not (isinstance(options["file"], str) and options["file"].strip()
                                   and not options["file"].startswith("/")):
         raise ValueError("file must be a path the transcript lists, such as outputs/notes.md")
+    if "variant" in options and not valid_variant(options["variant"]):
+        raise ValueError("variant must be a version handle such as v2")
+    if "variants" in options and options["variants"] not in VARIANT_MODES:
+        raise ValueError("variants must be notes, preview, or none")
+    if "map" in options:
+        if str(options["map"]).lower() not in {"", "1", "true"}:
+            raise ValueError("map takes no value")
+        if options.keys() & {"tool", "file", "variant"}:
+            raise ValueError("map shows the whole conversation; it does not combine with tool, file, or variant")
+        options["map"] = ""
     if "file" in options and "tool" in options:
         raise ValueError("file and tool read different parts of a chat; give one")
     return options
@@ -127,7 +139,7 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
             identifier = str(UUID(body.removeprefix("chat/")))
         except ValueError as exc:
             raise ValueError("claude chat targets require a UUID conversation ID") from exc
-    pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True) if query else []
+    pairs = query_pairs(query)
     if len(dict(pairs)) != len(pairs):
         raise ValueError("Duplicate claude query options are not supported")
     options = normalize_options({**dict(pairs), **normalize_options(overrides)}, kind)

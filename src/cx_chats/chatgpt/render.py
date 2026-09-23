@@ -18,7 +18,9 @@ from ..tools import (
     select,
     tools_note,
 )
+from ..query import with_query
 from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+from ..variants import Message, Tree, header_lines, note_lines, render_map
 
 SANDBOX_LINK = "sandbox:/mnt/data/"
 NOT_KEPT = "no output kept by ChatGPT"
@@ -227,6 +229,50 @@ def tool_calls(messages: list[dict[str, Any]]) -> tuple[list[Call], dict[str, Ca
     return calls, by_message
 
 
+def _mapping(payload: dict[str, Any]) -> dict[str, Any]:
+    mapping = payload.get("mapping")
+    return mapping if isinstance(mapping, dict) else {}
+
+
+def variant_tree(payload: dict[str, Any]) -> Tree:
+    messages = []
+    for key, node in _mapping(payload).items():
+        if not isinstance(node, dict):
+            continue
+        parent = node.get("parent") if isinstance(node.get("parent"), str) else None
+        message = node.get("message")
+        if not isinstance(message, dict):
+            messages.append(Message(key, parent, "assistant", None, meaningful=False))
+            continue
+        role, _ = _author(message)
+        content = _content(message)
+        side = "user" if role == "user" else "assistant"
+        replying = role == "assistant" and message.get("recipient") in (None, "all") and not _reasoning(message)
+        said = _prose(content) if role == "user" else _referenced(_prose(content), _detail(message)) if replying else ""
+        messages.append(Message(
+            key, parent, side, iso_timestamp(message.get("create_time")), said.strip(),
+            meaningful=not _hidden(message) and not (role == "tool" and not _text(content).strip()),
+            model=_model(message) if side == "assistant" else None,
+            qualifier="dictated" if role == "user" and _detail(message).get("dictation") is True else None,
+        ))
+    return Tree(messages, payload.get("current_node"))
+
+
+def variant_payload(payload: dict[str, Any], variant: str | None) -> dict[str, Any]:
+    if not variant:
+        return payload
+    return {**payload, "current_node": variant_tree(payload).leaf_for(variant)}
+
+
+def render_conversation_map(payload: dict[str, Any], target: str) -> tuple[str, dict[str, Any]]:
+    tree = variant_tree(payload)
+    title = payload.get("title") or "Untitled conversation"
+    return render_map(tree, title, target), {
+        "conversation_id": payload.get("conversation_id") or payload.get("id"), "title": title,
+        "variants": tree.summary(),
+    }
+
+
 def _turns(messages: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
     turns: list[tuple[str, list[dict[str, Any]]]] = []
     for message in messages:
@@ -296,7 +342,7 @@ def _assistant_lines(message: dict[str, Any], call: Call | None, tools: str, hea
     if call is not None:
         if tools == "none":
             return []
-        full = f"{target}?tool={call.handle}" if target else None
+        full = with_query(target, f"tool={call.handle}") if target else None
         return [call_line(call) if tools == "lines" else call_preview(call, head, tail, full), ""]
     content = _content(message)
     kind = content.get("content_type")
@@ -319,13 +365,20 @@ def render_conversation(
     files: Sequence[ChatFile] = (),
     files_problem: str | None = None,
     tools: str = "lines",
+    variants: str = "notes",
+    variant: str | None = None,
     target: str | None = None,
     head_tokens: int = HEAD_TOKENS,
     tail_tokens: int = TAIL_TOKENS,
 ) -> tuple[str, dict[str, Any], str, list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("ChatGPT conversation payload must be an object")
+    tree = variant_tree(payload)
+    payload = variant_payload(payload, variant)
+    base, target = target, with_query(target, f"variant={variant}") if target and variant else target
     nodes, issues = _active_branch(payload)
+    key_of = {id(node.get("message")): key for key, node in _mapping(payload).items() if isinstance(node, dict)}
+    forks = tree.forks_on(tree.path(payload.get("current_node"))) if variants != "none" else {}
     title = payload.get("title") or "Untitled conversation"
     identifier = payload.get("conversation_id") or payload.get("id")
     created = iso_timestamp(payload.get("create_time"))
@@ -353,7 +406,9 @@ def render_conversation(
                         ("Models", ", ".join(models))):
         if value:
             lines.extend([f"{name}: {label(value)}", ""])
-    lines.extend(["Branch: active ancestry selected by current_node; alternative branches are not rendered.", ""])
+    if not variant:
+        lines.extend(["Branch: active ancestry selected by current_node; alternative branches are not rendered.", ""])
+    lines.extend(header_lines(tree, base, variant))
     lines.extend(file_index(list(files), files_problem) if attach_files else [])
     lines.extend(tools_note(tools, target, calls))
     if any(call.output_note == NOT_KEPT for call in calls):
@@ -371,6 +426,10 @@ def render_conversation(
             continue
         turn = [message for message in turn if not _hidden(message)]
         lines.extend([_heading(role, turn), ""])
+        for message in turn:
+            key = key_of.get(id(message))
+            if key in forks:
+                lines.extend(note_lines(forks[key], key, variants))
         if role == "user":
             said = "\n\n".join(_prose(_content(message)) for message in turn).strip()
             body = "\n\n".join(_text(_content(message)) for message in turn).strip()
@@ -443,15 +502,17 @@ def render_conversation(
         "media_fetched": False,
         "files_mode": "attach" if attach_files else "inline",
         "files": [file_summary(file) for file in files],
+        "variant": variant,
+        "variants": tree.summary(),
     }
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors
 
 
 def render_tools(payload: dict[str, Any], spec: str, *, target: str, offset: int = 0,
-                 tokens: int | None = None) -> tuple[str, dict[str, Any]]:
+                 tokens: int | None = None, variant: str | None = None) -> tuple[str, dict[str, Any]]:
     if not isinstance(payload, dict):
         raise ValueError("ChatGPT conversation payload must be an object")
-    nodes, issues = _active_branch(payload)
+    nodes, issues = _active_branch(variant_payload(payload, variant))
     messages = [
         node["message"] for node in nodes
         if isinstance(node.get("message"), dict) and not _hidden(node["message"])
@@ -459,6 +520,7 @@ def render_tools(payload: dict[str, Any], spec: str, *, target: str, offset: int
     calls, _ = tool_calls(messages)
     chosen = select(calls, spec)
     title = payload.get("title") or "Untitled conversation"
+    target = with_query(target, f"variant={variant}") if variant else target
     lines = [render_calls(title, "ChatGPT conversation", target, chosen, offset=offset, tokens=tokens)]
     if issues:
         lines.extend(["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""])

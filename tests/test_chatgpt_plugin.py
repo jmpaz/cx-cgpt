@@ -430,3 +430,44 @@ def test_invalid_tool_options_fail_before_any_request(fake_client, query, messag
     with pytest.raises(ValueError, match=message):
         plugin.resolve(f"chatgpt:thread/{ID}?{query}", {})
     assert fake_client.calls == []
+
+
+def regenerated_after_call():
+    payload = conversation_with_call()
+    payload["mapping"]["retry"] = {"parent": "result", "message": {
+        "id": "retry", "author": {"role": "assistant"},
+        "content": {"content_type": "text", "parts": ["A second look."]},
+    }}
+    payload["current_node"] = "retry"
+    return payload
+
+
+def test_a_version_keeps_its_handle_in_tool_links(fake_client):
+    fake_client.responses = [regenerated_after_call()]
+    item, = plugin.resolve(f"chatgpt:thread/{ID}?variant=v1&files=inline", {})
+    assert "This is a visual instrument." in item["content"] and "A second look." not in item["content"]
+    assert f"read one in full with chatgpt:thread/{ID}?variant=v1&tool=t1" in item["content"]
+    assert item["metadata"]["context_subpath"] == f"chatgpt/{ID}/v1.md"
+    fake_client.responses = [regenerated_after_call()]
+    item, = plugin.resolve(f"chatgpt:thread/{ID}?variant=v1&tool=t1&result_tokens=20", {})
+    assert f"Continue: chatgpt:thread/{ID}?variant=v1&tool=t1&result_offset=20" in item["content"]
+    assert item["metadata"]["context_subpath"] == f"chatgpt/{ID}/v1/t1.md"
+
+
+def test_the_map_outlines_versions_without_file_requests(fake_client):
+    @click.command()
+    def command(**params):
+        overrides = plugin.collect_cli_overrides("cat", params)
+        item, = plugin.resolve(f"chatgpt:thread/{ID}", {"overrides": {"chatgpt": overrides}})
+        click.echo(item["source"] + "\n" + item["metadata"]["context_subpath"] + "\n" + item["content"])
+
+    plugin.register_cli_options("cat", command)
+    fake_client.responses = [regenerated_after_call()]
+    result = CliRunner().invoke(command, ["--chatgpt-map"])
+    assert result.exit_code == 0, result.output
+    source, subpath, content = result.output.split("\n", 2)
+    assert source == f"chatgpt:thread/{ID}?map"
+    assert subpath == f"chatgpt/{ID}/map.md"
+    assert content.startswith("# Example conversation · map")
+    assert "1 fork; ● marks the current path." in content
+    assert fake_client.calls == [(f"/conversation/{ID}", None)]

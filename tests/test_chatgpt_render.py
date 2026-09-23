@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from cx_chats.chatgpt.render import render_conversation, render_tools
+from cx_chats.chatgpt.render import render_conversation, render_conversation_map, render_tools
 
 
 def message(identifier, role, content, **extra):
@@ -420,7 +420,7 @@ def test_turn_headings_carry_each_replys_model_and_dictation():
     payload["current_node"] = "again"
     text, metadata, _, _ = render_conversation(payload)
     assert "## user · dictated · 2023-11-14T22:13:20Z\n\nQuestion" in text
-    assert "## assistant · example-model · 2023-11-14T22:14:20Z\n\nAnswer" in text
+    assert "## assistant · example-model · 2023-11-14T22:14:20Z\n\n⑂ version v2 of this reply; others: v1\n\nAnswer" in text
     assert "## user · 2023-11-14T22:15:20Z\n\nAgain" in text
     assert "## assistant · other-model · 2023-11-14T22:16:20Z\n\nSecond" in text
     assert "Models: example-model, other-model" in text
@@ -504,3 +504,62 @@ def test_a_range_of_calls_reads_in_full_and_long_output_pages():
     assert "Continue: chatgpt:thread/conversation?tool=t1&result_offset=30&result_tokens=20" in page
     with pytest.raises(ValueError, match="No tool call t4-t5"):
         render_tools(calls_turn(), "t4-t5", target="chatgpt:thread/conversation")
+
+
+def test_a_regenerated_reply_is_noted_and_its_other_version_opens():
+    payload = conversation()
+    payload["mapping"]["question"]["children"] = ["answer", "alternate"]
+    text, metadata, _, _ = render_conversation(payload, target="chatgpt:thread/conversation")
+    assert "⑂ version v1 of this reply; others: v2" in text
+    assert "Variants: 1 fork, marked ⑂ where they meet this path." in text
+    assert "Alternative" not in text
+    assert metadata["variants"] == [{"kind": "reply", "versions": [
+        {"handle": "v1", "message_id": "answer", "created": None, "model": "example-model", "current": True},
+        {"handle": "v2", "message_id": "alternate", "created": None, "model": None, "current": False},
+    ]}]
+    other, metadata, _, _ = render_conversation(payload, variant="v2", target="chatgpt:thread/conversation")
+    assert "Alternative" in other and "\nAnswer" not in other
+    assert "Branch: version v2 and its latest continuation, not the current path (chatgpt:thread/conversation)." in other
+    assert "⑂ version v2 of this reply; others: v1 (current, example-model)" in other
+    assert metadata["variant"] == "v2"
+
+
+def test_variant_modes_preview_or_hide_the_other_versions():
+    preview, *_ = render_conversation(conversation(), variants="preview")
+    assert "⑂ version v1 of this reply; others: v2\n    v2: Alternative" in preview
+    hidden, *_ = render_conversation(conversation(), variants="none")
+    assert "⑂" not in hidden
+
+
+def test_an_edited_message_is_noted_on_the_user_turn():
+    payload = conversation()
+    mapping = payload["mapping"]
+    mapping["edited"] = {"id": "edited", "parent": "root", "message": message("e", "user", "Question, reworded", create_time=5)}
+    mapping["later"] = {"id": "later", "parent": "edited", "message": message("l", "assistant", "Reworded answer", create_time=6)}
+    mapping["question"]["message"]["create_time"] = 1
+    payload["current_node"] = "later"
+    text, *_ = render_conversation(payload)
+    assert "## user · 1970-01-01T00:00:05Z\n\n⑂ version v2 of this message; others: v1 (1970-01-01T00:00:01Z)" in text
+
+
+def test_status_placeholders_are_not_versions():
+    payload = conversation()
+    del payload["mapping"]["alternate"]
+    payload["mapping"]["status"] = {"id": "status", "parent": "question", "message": {
+        "id": "s", "author": {"role": "tool", "name": "a8km123"},
+        "content": {"content_type": "text", "parts": [""]}, "metadata": {"finished_text": "Worked for 3m"},
+    }}
+    text, metadata, _, _ = render_conversation(payload)
+    assert "⑂" not in text and metadata["variants"] == []
+
+
+def test_the_map_outlines_every_version():
+    payload = conversation()
+    payload["mapping"]["follow"] = {"id": "follow", "parent": "alternate", "message": message("f", "user", "And then?")}
+    text, metadata = render_conversation_map(payload, "chatgpt:thread/conversation")
+    assert text.startswith("# Example · map\n\n1 fork; ● marks the current path.")
+    assert "● 1 user · Question" in text
+    assert "●   v1 · 2 assistant · example-model · Answer" in text
+    assert "    v2 · 2 assistant · Alternative" in text
+    assert "      3 user · And then?" in text
+    assert metadata["variants"][0]["kind"] == "reply"

@@ -4,12 +4,15 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import urlsplit
 from uuid import UUID
 
+from ..query import query_pairs, query_string
 from ..tools import TOOL_MODES, valid_handles
+from ..variants import VARIANT_MODES, valid_variant
 
-_TOOL_OPTIONS = {"tool", "tools", "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens"}
+_TOOL_OPTIONS = {"tool", "tools", "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens",
+                 "variant", "variants", "map"}
 _OPTIONS = {
     "thread": {"output", "file", "files", *_TOOL_OPTIONS},
     "share": {"output", *_TOOL_OPTIONS},
@@ -36,7 +39,7 @@ class Target:
             body = f"share/{self.share_id}"
         else:
             body = self.kind
-        query = urlencode(sorted(self.options.items()))
+        query = query_string(self.options)
         return f"chatgpt:{body}" + (f"?{query}" if query else "")
 
 
@@ -101,6 +104,16 @@ def normalize_options(
         raise ValueError("tool must be a handle such as t3 or a range such as t3-t9")
     if "tools" in options and options["tools"] not in TOOL_MODES:
         raise ValueError("tools must be lines, preview, or none")
+    if "variant" in options and not valid_variant(options["variant"]):
+        raise ValueError("variant must be a version handle such as v2")
+    if "variants" in options and options["variants"] not in VARIANT_MODES:
+        raise ValueError("variants must be notes, preview, or none")
+    if "map" in options:
+        if str(options["map"]).lower() not in {"", "1", "true"}:
+            raise ValueError("map takes no value")
+        if options.keys() & {"tool", "file", "variant"}:
+            raise ValueError("map shows the whole conversation; it does not combine with tool, file, or variant")
+        options["map"] = ""
     if "tool" in options and "file" in options:
         raise ValueError("file and tool read different parts of a conversation; give one")
     if "cursor" in options and (
@@ -184,7 +197,7 @@ def parse_target(raw: str, overrides: dict[str, Any] | None = None) -> Target | 
             raise ValueError(
                 "ChatGPT thread targets require a UUID conversation ID"
             ) from exc
-    pairs = parse_qsl(query, keep_blank_values=True, strict_parsing=True)
+    pairs = query_pairs(query)
     if len(dict(pairs)) != len(pairs):
         raise ValueError("Duplicate chatgpt query options are not supported")
     options = normalize_options({**dict(pairs), **normalize_options(overrides)}, kind)

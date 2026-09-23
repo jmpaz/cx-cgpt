@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
+from .query import with_query
 from .transcript import json_block, label
 
 CHARS_PER_TOKEN = 4
@@ -155,10 +156,11 @@ def tools_note(mode: str, target: str | None, calls: list[Call]) -> list[str]:
     if not calls or not target:
         return []
     if mode == "preview":
-        return [f"Tool calls: results previewed; read one in full with {target}?tool=t1, or a range with ?tool=t1-t3.", ""]
+        return [f"Tool calls: results previewed; read one in full with {with_query(target, 'tool=t1')}, "
+                "or a range with tool=t1-t3.", ""]
     shown = "one line each" if mode == "lines" else "counted per turn"
-    return [f"Tool calls: {shown}; read one in full with {target}?tool=t1, a range with ?tool=t1-t3, "
-            "or previews of every result with ?tools=preview.", ""]
+    return [f"Tool calls: {shown}; read one in full with {with_query(target, 'tool=t1')}, a range with tool=t1-t3, "
+            "or previews of every result with tools=preview.", ""]
 
 
 def _window(text: str, offset: int, tokens: int | None, next_target: str) -> list[str]:
@@ -194,7 +196,7 @@ def _sections(call: Call, level: str, offset: int, tokens: int | None, target: s
         note = call.output_note or ("empty" if call.output is not None else "no result recorded")
         lines.extend([note[:1].upper() + note[1:] + ".", ""])
     else:
-        lines.extend([*_window(call.output, offset, tokens, f"{target}?tool={call.handle}"), ""])
+        lines.extend([*_window(call.output, offset, tokens, with_query(target, f"tool={call.handle}")), ""])
     for value, heading in ((call.structured, "Structured content"), (call.meta, "Metadata")):
         if value:
             lines.extend([f"{level} {heading}", "", json_block(value), ""])

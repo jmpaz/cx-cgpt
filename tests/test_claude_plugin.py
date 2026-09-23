@@ -212,3 +212,50 @@ def test_continuation_offset_is_not_reset_by_list_context(fake_client):
     fake_client.pages = [{"data": [{"uuid": CONVERSATION, "name": "Runtime check"}], "has_more": False}]
     plugin.list_targets("claude:chats?limit=100&offset=100", {"list_limit": 100, "list_offset": 0})
     assert fake_client.calls == [("conversations", 100, 100)]
+
+
+def retried():
+    question = message("q", ROOT, "human", [block("text", "2026-09-22T19:59:21Z", text="Name it")])
+    first = message("a1", "q", "assistant", [block("text", "2026-09-22T19:59:22Z", text="First name")])
+    second = message("a2", "q", "assistant", [block("text", "2026-09-22T19:59:30Z", text="Second name")],
+                     input_mode="retry")
+    return conversation(question, first, second, leaf="a2")
+
+
+def test_a_version_reads_under_its_own_path(fake_client):
+    fake_client.payload = retried()
+    item, = plugin.resolve(f"claude:chat/{CONVERSATION}?variant=v1", {})
+    assert "First name" in item["content"] and "Second name" not in item["content"]
+    assert item["metadata"]["context_subpath"] == f"claude/{CONVERSATION}/v1.md"
+    assert item["metadata"]["variant"] == "v1"
+
+
+def test_the_map_reads_without_files(fake_client):
+    fake_client.payload = retried()
+    item, = plugin.resolve(f"claude:chat/{CONVERSATION}?map", {})
+    assert item["source"] == f"claude:chat/{CONVERSATION}?map"
+    assert item["content"].startswith("# Runtime check · map")
+    assert item["metadata"]["context_subpath"] == f"claude/{CONVERSATION}/map.md"
+    assert fake_client.calls == [("conversation", CONVERSATION)]
+
+
+@pytest.mark.parametrize("query, error", [
+    ("variant=2", "variant must be a version handle"),
+    ("variants=all", "variants must be notes, preview, or none"),
+    ("map&variant=v1", "map shows the whole conversation"),
+    ("map=no", "map takes no value"),
+])
+def test_invalid_variant_options_fail_before_any_request(fake_client, query, error):
+    with pytest.raises(ValueError, match=error):
+        plugin.resolve(f"claude:chat/{CONVERSATION}?{query}", {})
+    assert fake_client.calls == []
+
+
+def test_the_map_flag_becomes_an_override():
+    @click.command()
+    def cat(**params):
+        click.echo(json.dumps(plugin.collect_cli_overrides("cat", params)))
+
+    plugin.register_cli_options("cat", cat)
+    assert json.loads(CliRunner().invoke(cat, ["--claude-map"]).output) == {"map": True}
+    assert json.loads(CliRunner().invoke(cat, ["--claude-variants", "preview"]).output) == {"variants": "preview"}
