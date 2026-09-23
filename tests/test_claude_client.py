@@ -52,8 +52,22 @@ def test_listing_request_uses_offset_pages():
     assert opener.requests[0].full_url.endswith("/chat_conversations_v2?limit=5&offset=10&consistency=eventual")
 
 
+def test_output_files_are_listed_and_downloaded_as_bytes_within_a_limit():
+    opener = FakeOpener(b'{"success": true, "files": []}', b"# Plan\n", b"x" * 11)
+    claude = client(opener)
+    assert claude.output_files(ID) == {"success": True, "files": []}
+    assert claude.output_file(ID, "/mnt/user-data/outputs/plan.md", limit=10) == b"# Plan\n"
+    listing, download = opener.requests
+    assert listing.full_url == f"https://claude.ai/api/organizations/{ORG}/conversations/{ID}/wiggle/list-files"
+    assert download.full_url.endswith(f"/conversations/{ID}/wiggle/download-file?path=%2Fmnt%2Fuser-data%2Foutputs%2Fplan.md")
+    assert download.get_header("Accept") == "*/*"
+    with pytest.raises(TransportError, match="size limit"):
+        claude.output_file(ID, "/mnt/user-data/outputs/big.md", limit=10)
+
+
 @pytest.mark.parametrize("path", [
     f"/api/organizations/{ORG}/chat_conversations/{ID}/completion",
+    f"/api/organizations/{ORG}/conversations/{ID}/wiggle/upload-file",
     f"/api/organizations/{ORG}",
     "/api/auth/logout",
 ])

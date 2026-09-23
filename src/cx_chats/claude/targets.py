@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import UUID
 
 _OPTIONS = {
-    "chat": {"output", "tool", "result_head_tokens", "result_tail_tokens"},
+    "chat": {"output", "tool", "file", "files", "result_head_tokens", "result_tail_tokens"},
     "chats": {"after", "before", "limit", "offset", "output"},
     "search": {"query", "project", "after", "before", "limit", "offset", "output"},
 }
@@ -92,6 +92,13 @@ def normalize_options(raw: dict[str, Any] | None, kind: str | None = None) -> di
         raise ValueError("output must be transcript or json")
     if "tool" in options and not (isinstance(options["tool"], str) and _HANDLE.fullmatch(options["tool"])):
         raise ValueError("tool must be a tool handle such as t3")
+    if "files" in options and options["files"] not in {"attach", "inline"}:
+        raise ValueError("files must be attach or inline")
+    if "file" in options and not (isinstance(options["file"], str) and options["file"].strip()
+                                  and not options["file"].startswith("/")):
+        raise ValueError("file must be a path the transcript lists, such as outputs/notes.md")
+    if "file" in options and "tool" in options:
+        raise ValueError("file and tool read different parts of a chat; give one")
     return options
 
 

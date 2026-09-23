@@ -4,9 +4,11 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from collections.abc import Iterator, Sequence
 from typing import Any
 
 from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+from .files import ChatFile, uploads
 
 ROOT_PARENT = "00000000-0000-4000-8000-000000000000"
 HEAD_TOKENS = 160
@@ -214,10 +216,16 @@ def _citation_urls(block: dict[str, Any]) -> list[str]:
     return urls
 
 
-def _user_extras(message: dict[str, Any]) -> list[str]:
+def _user_extras(message: dict[str, Any], attached: Iterator[ChatFile] | None) -> list[str]:
     lines = []
     for attachment in message.get("attachments") or []:
         if not isinstance(attachment, dict):
+            continue
+        if attached is not None:
+            file = next(attached)
+            described = file.described()
+            lines.extend([f"Attachment: {label(file.label)}" + (f" ({described})" if described else "")
+                          + (f"; not included: {file.omitted}" if file.omitted else ""), ""])
             continue
         details = [attachment.get("file_type")]
         if isinstance(attachment.get("file_size"), int):
@@ -237,12 +245,35 @@ def _user_extras(message: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _incomplete(issues: list[str]) -> list[str]:
+    return ["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""] if issues else []
+
+
+def _file_index(files: list[ChatFile], outputs_problem: str | None) -> list[str]:
+    included = [file for file in files if file.content is not None]
+    omitted = [file for file in files if file.content is None]
+    lines = []
+    if included:
+        lines.extend(["Files following the transcript:", *[f"- {label(file.label)}" for file in included], ""])
+    if omitted:
+        lines.extend(["Files not included:", *[
+            f"- {label(file.label)}" + (f" ({file.described()})" if file.described() else "") + f": {label(file.omitted)}"
+            for file in omitted
+        ], ""])
+    if outputs_problem:
+        lines.extend([f"Output files could not be listed: {label(outputs_problem)}", ""])
+    return lines
+
+
 def render_conversation(
-    payload: dict[str, Any], *, head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
+    payload: dict[str, Any], *, attach_files: bool = False, outputs: Sequence[ChatFile] = (),
+    outputs_problem: str | None = None, head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
 ) -> tuple[str, dict[str, Any], str, list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("claude.ai conversation payload must be an object")
     branch, issues = active_branch(payload)
+    files = [*uploads(branch), *outputs] if attach_files else []
+    attached = iter(files) if attach_files else None
     calls = tool_calls(branch)
     call_for = {id(call.use if call.use is not None else call.result): call for call in calls}
     identifier = payload.get("uuid")
@@ -265,6 +296,8 @@ def render_conversation(
     )
     if summarized:
         lines.extend(["Reasoning: the service returned summaries only; raw thinking is hidden.", ""])
+    lines.extend(_file_index(files, outputs_problem))
+    lines.extend(_incomplete(issues))
     segments = Segments()
     prose_parts: list[str] = []
     authors: list[str] = []
@@ -312,7 +345,7 @@ def render_conversation(
             else:
                 lines.extend([f"Structured content ({label(kind)}):", "", json_block(block), ""])
         if role == "user":
-            lines.extend(_user_extras(message))
+            lines.extend(_user_extras(message, attached))
             segments.user("\n\n".join(said), started)
         if said:
             prose_parts.append("\n\n".join(said))
@@ -322,10 +355,6 @@ def render_conversation(
             lines.extend(["The service marked this message as truncated.", ""])
     if not branch and not issues:
         lines.extend(["The conversation has no messages.", ""])
-    if issues:
-        lines.extend(["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""])
-    else:
-        lines.extend(["Capture status: complete active branch; attachment and file bytes are not fetched.", ""])
     turns = segments.finish()
     metadata = {
         "conversation_id": identifier,
@@ -352,6 +381,12 @@ def render_conversation(
         "approx_tokens": approx_tokens(turns),
         "segments": turns,
         "media_fetched": False,
+        "files_mode": "attach" if attach_files else "inline",
+        "files": [
+            {"label": file.label, "origin": file.origin, "content_type": file.content_type, "size": file.size,
+             "created": file.created, "included": file.content is not None, "omitted": file.omitted}
+            for file in files
+        ],
     }
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors
 
@@ -375,6 +410,7 @@ def render_tool(payload: dict[str, Any], handle: str) -> tuple[str, dict[str, An
                         ("Error", "yes" if call.is_error else None)):
         if value:
             lines.extend([f"{name}: {label(value)}", ""])
+    lines.extend(_incomplete(issues))
     lines.extend(["## Input", "", json_block(call.use.get("input")) if call.use else "No call recorded.", ""])
     lines.extend(["## Output", ""])
     if call.result is None:
@@ -384,8 +420,6 @@ def render_tool(payload: dict[str, Any], handle: str) -> tuple[str, dict[str, An
         for key, heading in (("structured_content", "Structured content"), ("meta", "Metadata")):
             if call.result.get(key):
                 lines.extend([f"## {heading}", "", json_block(call.result[key]), ""])
-    if issues:
-        lines.extend(["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""])
     metadata = {
         "conversation_id": identifier, "title": title, "tool": call.handle, "name": call.name,
         "integration": call.integration, "mcp_server_url": call.server_url, "is_error": call.is_error,

@@ -2,10 +2,11 @@ import json
 
 import click
 import pytest
-from claude_payloads import CONVERSATION, conversation, tool_turn
+from claude_payloads import CONVERSATION, ROOT, block, conversation, message, tool_turn
 from click.testing import CliRunner
 
 from cx_chats.claude import plugin
+from cx_chats.http import TransportError
 
 
 @pytest.fixture
@@ -33,7 +34,19 @@ def fake_client(monkeypatch):
             self.calls.append(("conversations", limit, offset))
             return self.pages.pop(0)
 
+        def output_files(self, conversation_id):
+            self.calls.append(("output_files", conversation_id))
+            if isinstance(self.outputs, Exception):
+                raise self.outputs
+            return self.outputs
+
+        def output_file(self, conversation_id, path, *, limit):
+            self.calls.append(("output_file", path))
+            return self.downloads[path]
+
     Client.calls = []
+    Client.outputs = {"success": True, "files": [], "files_metadata": []}
+    Client.downloads = {}
     monkeypatch.setattr(plugin, "ClaudeClient", Client)
     return Client
 
@@ -50,7 +63,7 @@ def test_chat_url_resolves_to_transcript_with_provenance(fake_client):
     assert metadata["context_subpath"] == f"claude/{CONVERSATION}.md"
     assert metadata["source_url"] == f"https://claude.ai/chat/{CONVERSATION}"
     assert metadata["message_count"] == 2
-    assert fake_client.calls == [("conversation", CONVERSATION)]
+    assert fake_client.calls == [("conversation", CONVERSATION), ("output_files", CONVERSATION)]
 
 
 def test_tool_target_reads_one_call_in_full(fake_client):
@@ -65,6 +78,78 @@ def test_json_output_returns_service_payload(fake_client):
     fake_client.payload = conversation(*tool_turn())
     item, = plugin.resolve(f"claude:{CONVERSATION}?output=json", {})
     assert json.loads(item["content"]) == fake_client.payload
+
+
+def chat_with_files(fake_client):
+    question = message(
+        "q", ROOT, "human", [block("text", "2026-09-22T19:59:21Z", text="Here are my notes")],
+        attachments=[
+            {"id": "att-1", "file_name": "", "file_type": "txt", "file_size": 11, "extracted_content": "pasted text"},
+            {"id": "att-2", "file_name": "notes.txt", "file_type": "txt", "file_size": 5, "extracted_content": "notes"},
+        ],
+    )
+    answer = message("a", "q", "assistant", [block("text", "2026-09-22T19:59:30Z", text="Wrote the plan.")])
+    fake_client.payload = conversation(question, answer)
+    fake_client.outputs = {"success": True, "files": [
+        "/mnt/user-data/outputs/plan.md", "/mnt/user-data/outputs/chart.png",
+    ], "files_metadata": [
+        {"path": "/mnt/user-data/outputs/plan.md", "size": 7, "content_type": "text/plain", "created_at": "2026-09-22T19:59:29Z"},
+        {"path": "/mnt/user-data/outputs/chart.png", "size": 2048, "content_type": "image/png"},
+    ]}
+    fake_client.downloads = {"/mnt/user-data/outputs/plan.md": "# Plan\n".encode()}
+
+
+def test_text_uploads_and_output_files_follow_the_transcript_as_files(fake_client):
+    chat_with_files(fake_client)
+    transcript, *files = plugin.resolve(f"https://claude.ai/chat/{CONVERSATION}", {})
+    assert [(file["label"], file["content"]) for file in files] == [
+        ("uploads/pasted-1.txt", "pasted text"), ("uploads/notes.txt", "notes"), ("outputs/plan.md", "# Plan\n"),
+    ]
+    assert files[2]["source"] == f"claude:chat/{CONVERSATION}?file=outputs%2Fplan.md"
+    assert files[2]["metadata"]["context_subpath"] == f"claude/{CONVERSATION}/outputs/plan.md"
+    assert files[2]["metadata"]["kind"] == "file"
+    text = transcript["content"]
+    assert ("Files following the transcript:\n- uploads/pasted-1.txt\n- uploads/notes.txt\n- outputs/plan.md\n\n"
+            "Files not included:\n- outputs/chart.png (image/png, 2,048 bytes): not text") in text
+    assert "Attachment: uploads/pasted-1.txt (txt, 11 bytes)\n\nAttachment: uploads/notes.txt (txt, 5 bytes)" in text
+    assert "pasted text" not in text
+    assert text.index("Files following") < text.index("## user")
+    assert ("output_file", "/mnt/user-data/outputs/chart.png") not in fake_client.calls
+    assert transcript["metadata"]["files"][3] == {
+        "label": "outputs/chart.png", "origin": "output", "content_type": "image/png", "size": 2048,
+        "created": None, "included": False, "omitted": "not text",
+    }
+
+
+def test_inline_files_keep_uploads_in_their_message_and_skip_outputs(fake_client):
+    chat_with_files(fake_client)
+    transcript, = plugin.resolve(f"claude:chat/{CONVERSATION}?files=inline", {})
+    assert "Attachment: notes.txt (txt, 5 bytes)\n\n```\nnotes\n```" in transcript["content"]
+    assert "Files following" not in transcript["content"]
+    assert fake_client.calls == [("conversation", CONVERSATION)]
+
+
+def test_one_file_reads_by_the_path_the_transcript_lists(fake_client):
+    chat_with_files(fake_client)
+    output, = plugin.resolve(f"claude:chat/{CONVERSATION}?file=outputs/plan.md", {})
+    assert (output["label"], output["content"]) == ("outputs/plan.md", "# Plan\n")
+    assert ("output_file", "/mnt/user-data/outputs/chart.png") not in fake_client.calls
+    fake_client.calls.clear()
+    upload, = plugin.resolve(f"claude:chat/{CONVERSATION}?file=uploads/notes.txt", {})
+    assert upload["content"] == "notes"
+    assert fake_client.calls == [("conversation", CONVERSATION)]
+    with pytest.raises(ValueError, match="outputs/chart.png is not included: not text"):
+        plugin.resolve(f"claude:chat/{CONVERSATION}?file=outputs/chart.png", {})
+    with pytest.raises(ValueError, match="No file outputs/missing.md"):
+        plugin.resolve(f"claude:chat/{CONVERSATION}?file=outputs/missing.md", {})
+
+
+def test_unlisted_outputs_are_reported_without_failing_the_read(fake_client):
+    chat_with_files(fake_client)
+    fake_client.outputs = TransportError("claude.ai request failed (HTTP 503).")
+    transcript, *files = plugin.resolve(f"claude:chat/{CONVERSATION}", {})
+    assert [file["label"] for file in files] == ["uploads/pasted-1.txt", "uploads/notes.txt"]
+    assert "Output files could not be listed: claude.ai request failed (HTTP 503)." in transcript["content"]
 
 
 def test_mismatched_conversation_is_rejected(fake_client):

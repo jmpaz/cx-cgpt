@@ -63,8 +63,15 @@ def test_only_active_branch_is_rendered():
 def test_missing_ancestor_marks_capture_incomplete():
     answer = message("a", "gone", "assistant", [block("text", "2026-09-22T19:59:22Z", text="Orphan")])
     text, metadata, _, _ = render_conversation(conversation(answer))
-    assert "Capture status: INCOMPLETE" in text
+    assert "Capture status: INCOMPLETE\n\n- Missing ancestor message gone." in text
+    assert text.index("Capture status") < text.index("## assistant")
     assert metadata["incomplete_reasons"] == ["Missing ancestor message gone."]
+
+
+def test_a_complete_capture_ends_with_the_last_message():
+    text, *_ = render_conversation(conversation(*tool_turn()))
+    assert text.rstrip().endswith("The registry lists three sources.")
+    assert "Capture status" not in text
 
 
 def test_user_attachments_files_and_unknown_blocks_stay_visible():

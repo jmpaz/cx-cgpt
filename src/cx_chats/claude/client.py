@@ -15,7 +15,8 @@ ORIGIN = "https://claude.ai"
 MAX_BYTES = 64 * 1024 * 1024
 _UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 _ALLOWED = re.compile(
-    rf"/api/organizations/{_UUID}/(?:chat_conversations/{_UUID}|chat_conversations_v2|conversation/search/v2)"
+    rf"/api/organizations/{_UUID}/(?:chat_conversations/{_UUID}|chat_conversations_v2|conversation/search/v2"
+    rf"|conversations/{_UUID}/wiggle/(?:list-files|download-file))"
 )
 SNIPPET_CHARS = 200
 
@@ -68,19 +69,39 @@ class ClaudeClient:
             params["project_uuid"] = project
         return self.get(f"/api/organizations/{self.organization}/conversation/search/v2", params)
 
+    def output_files(self, conversation_id: str) -> dict:
+        return self.get(f"/api/organizations/{self.organization}/conversations/{conversation_id}/wiggle/list-files")
+
+    def output_file(self, conversation_id: str, path: str, *, limit: int) -> bytes:
+        return self.fetch(
+            f"/api/organizations/{self.organization}/conversations/{conversation_id}/wiggle/download-file",
+            {"path": path}, accept="*/*", limit=limit,
+        )
+
     def get(self, path: str, params: dict | None = None) -> dict:
+        content = self.fetch(path, params)
+        try:
+            result = json.loads(content)
+        except (ValueError, UnicodeDecodeError):
+            raise TransportError("claude.ai returned invalid JSON.") from None
+        if not isinstance(result, dict):
+            raise TransportError("claude.ai returned an unexpected response shape.")
+        return result
+
+    def fetch(self, path: str, params: dict | None = None, *,
+              accept: str = "application/json", limit: int = MAX_BYTES) -> bytes:
         if not _ALLOWED.fullmatch(path):
             raise TransportError("Unsupported claude.ai endpoint.")
         query = urllib.parse.urlencode(params or {})
         request = urllib.request.Request(
             ORIGIN + path + ("?" + query if query else ""),
-            headers={"Cookie": "sessionKey=" + self.session.key, "Accept": "application/json",
+            headers={"Cookie": "sessionKey=" + self.session.key, "Accept": accept,
                      "User-Agent": "cx-chats/0.1.0"},
             method="GET",
         )
         try:
             with self.opener.open(request, timeout=self.timeout) as response:
-                content = response.read(MAX_BYTES + 1)
+                content = response.read(limit + 1)
         except urllib.error.HTTPError as error:
             status = error.code
             kind = error.headers.get("Content-Type", "") if error.headers else ""
@@ -92,15 +113,9 @@ class ClaudeClient:
             raise TransportError(_failure(status, kind, body, self.session.source)) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise TransportError("claude.ai request failed; check network connectivity.") from None
-        if len(content) > MAX_BYTES:
-            raise TransportError("claude.ai response exceeded the 64 MiB size limit.")
-        try:
-            result = json.loads(content)
-        except (ValueError, UnicodeDecodeError):
-            raise TransportError("claude.ai returned invalid JSON.") from None
-        if not isinstance(result, dict):
-            raise TransportError("claude.ai returned an unexpected response shape.")
-        return result
+        if len(content) > limit:
+            raise TransportError(f"claude.ai response exceeded the size limit of {limit:,} bytes.")
+        return content
 
 
 def _failure(status: int, content_type: str, body: bytes, source: str) -> str:

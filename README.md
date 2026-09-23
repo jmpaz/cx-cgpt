@@ -196,6 +196,7 @@ they happened.
 ```sh
 contextualize cat 'https://claude.ai/chat/<conversation-id>'
 contextualize cat 'claude:chat/<conversation-id>?tool=t3'
+contextualize cat 'claude:chat/<conversation-id>?file=outputs/plan.md'
 contextualize cat --list --json 'claude:chats?limit=20'
 contextualize cat 'claude:search?query=mcp+debugging&after=2026-09-01'
 ```
@@ -220,7 +221,7 @@ again.
 claude.ai rejects OAuth tokens on these endpoints, including Claude Code's, so
 a browser session is the only credential that works. That session can do
 anything you can do on claude.ai; the plugin only sends GET requests to the
-conversation, listing, and search endpoints. Those are claude.ai's internal web
+conversation, listing, search, and chat file endpoints. Those are claude.ai's internal web
 endpoints, not a published API, and they can change without notice.
 
 ### Transcripts
@@ -241,14 +242,25 @@ alternatives left behind by retries and edits. Within an assistant turn:
 are estimated at four characters per token. `?output=json` returns claude.ai's
 own conversation object, including every branch.
 
-Text pasted or uploaded into a message is included. File and image bytes are
-not fetched.
-
 Metadata follows the ChatGPT source: `segments` (one per turn, with `index`,
 `role`, `text`, `start_time`, and `tools`), `message_count`, `approx_tokens`,
 `model`, `source_created`, and `source_modified`. `tool_calls` lists each
 call's handle, name, integration, MCP server URL, and error flag. `reasoning`
-is `"summaries"` when claude.ai hid the thinking.
+is `"summaries"` when claude.ai hid the thinking. `files` lists each file with
+its path, origin, type, size, and whether it was included.
+
+### Files
+
+A chat's text files come after its transcript, one document per file, the way a
+folder's files do: text pasted or uploaded into a message as `uploads/<name>`
+(long pastes as `uploads/pasted-1.txt`), and files Claude wrote as
+`outputs/<path>`. The transcript header lists them, and each upload is noted in
+the message that carried it. Uploaded images and PDFs are named in their
+message, and binary outputs or outputs over 2 MiB in the header; none of these
+are fetched.
+
+`?file=<path>` reads one of them. `?files=inline` returns the transcript alone,
+with uploads quoted in their messages and output files not fetched.
 
 ### Listing and search
 

@@ -4,9 +4,11 @@ import hashlib
 import json
 from typing import Any
 
+from ..http import TransportError
 from ..transcript import iso_timestamp
 from .client import ClaudeClient
-from .render import HEAD_TOKENS, TAIL_TOKENS, render_conversation, render_tool
+from .files import ChatFile, outputs, uploads
+from .render import HEAD_TOKENS, TAIL_TOKENS, active_branch, render_conversation, render_tool
 from .service import read_page, read_search
 from .targets import Target, is_claude_target, normalize_options, parse_target
 
@@ -16,7 +18,7 @@ PLUGIN_PRIORITY = 100
 PLUGIN_KIND = "source"
 
 _CLI_OPTIONS = (
-    "query", "project", "after", "before", "limit", "offset", "output", "tool",
+    "query", "project", "after", "before", "limit", "offset", "output", "tool", "file", "files",
     "result_head_tokens", "result_tail_tokens",
 )
 
@@ -115,45 +117,101 @@ def list_targets(target: str, context: dict) -> dict:
     }
 
 
-def resolve(target: str, context: dict) -> list[dict]:
-    parsed = _parse(target, context)
-    _require_live(context)
-    options = parsed.options
-    with ClaudeClient() as client:
-        if parsed.kind == "chat":
-            payload = client.conversation(parsed.conversation_id)
-            returned = payload.get("uuid")
-            if returned is not None and returned != parsed.conversation_id:
-                raise ValueError("claude.ai returned a different conversation ID")
-            if "tool" in options:
-                content, metadata = render_tool(payload, options["tool"])
-                prose, authors = "", []
-                key = f"{parsed.conversation_id}/{options['tool']}"
-            else:
-                content, metadata, prose, authors = render_conversation(
-                    payload,
-                    head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
-                    tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS),
-                )
-                key = parsed.conversation_id
-            metadata["source_url"] = f"https://claude.ai/chat/{parsed.conversation_id}"
-        else:
-            payload = _read(client, parsed)
-            content = _listing(parsed, payload)
-            metadata = {key: value for key, value in payload.items() if key != "items"}
-            prose, authors = "", []
-            key = hashlib.sha256(parsed.canonical.encode()).hexdigest()[:24]
-        if options.get("output") == "json":
-            content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    return [{
+def _file_document(conversation_id: str, file: ChatFile) -> dict:
+    source = Target("chat", conversation_id, {"file": file.label}).canonical
+    return {
+        "source": source, "label": file.label, "content": file.content, "prose": "", "prose_authors": [],
+        "metadata": {
+            "provider": PLUGIN_NAME, "kind": "file", "conversation_id": conversation_id,
+            "origin": file.origin, "path": file.path, "content_type": file.content_type, "size": file.size,
+            "source_created": file.created, "attachment_id": file.attachment_id,
+            "source_url": f"https://claude.ai/chat/{conversation_id}", "source_ref": "claude",
+            "scope_id": conversation_id, "trace_path": source,
+            "context_subpath": f"claude/{conversation_id}/{file.label}",
+        },
+    }
+
+
+def _chat_file(client: ClaudeClient, payload: dict, conversation_id: str, wanted: str) -> ChatFile:
+    branch, _ = active_branch(payload)
+    found = [file for file in uploads(branch) if file.label == wanted]
+    if not found and not wanted.startswith("uploads/"):
+        found = outputs(client, conversation_id, only=wanted)
+    if not found:
+        raise ValueError(f"No file {wanted} in this chat; the transcript's header lists its files.")
+    if found[0].content is None:
+        raise ValueError(f"{wanted} is not included: {found[0].omitted}.")
+    return found[0]
+
+
+def _outputs(client: ClaudeClient, conversation_id: str) -> tuple[list[ChatFile], str | None]:
+    try:
+        return outputs(client, conversation_id), None
+    except TransportError as error:
+        return [], str(error)
+
+
+def _read_chat(client: ClaudeClient, parsed: Target) -> tuple[list[dict], dict]:
+    options, identifier = parsed.options, parsed.conversation_id
+    payload = client.conversation(identifier)
+    returned = payload.get("uuid")
+    if returned is not None and returned != identifier:
+        raise ValueError("claude.ai returned a different conversation ID")
+    if "file" in options:
+        return [_file_document(identifier, _chat_file(client, payload, identifier, options["file"]))], payload
+    files: list[ChatFile] = []
+    if "tool" in options:
+        content, metadata = render_tool(payload, options["tool"])
+        prose, authors = "", []
+        key = f"{identifier}/{options['tool']}"
+    else:
+        attach = options.get("files", "attach") == "attach"
+        found, problem = _outputs(client, identifier) if attach else ([], None)
+        content, metadata, prose, authors = render_conversation(
+            payload, attach_files=attach, outputs=found, outputs_problem=problem,
+            head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
+            tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS),
+        )
+        files = [*uploads(active_branch(payload)[0]), *found] if attach else []
+        key = identifier
+    metadata["source_url"] = f"https://claude.ai/chat/{identifier}"
+    transcript = {
         "source": parsed.canonical, "label": metadata.get("title") or parsed.canonical,
         "content": content, "prose": prose, "prose_authors": authors,
         "metadata": {
             **metadata, "provider": PLUGIN_NAME, "kind": parsed.kind,
-            "source_ref": "claude", "scope_id": parsed.conversation_id or parsed.kind,
+            "source_ref": "claude", "scope_id": identifier,
             "trace_path": parsed.canonical, "context_subpath": f"claude/{key}.md",
         },
-    }]
+    }
+    return [transcript, *[_file_document(identifier, file) for file in files if file.content is not None]], payload
+
+
+def _listing_document(parsed: Target, page: dict) -> dict:
+    key = hashlib.sha256(parsed.canonical.encode()).hexdigest()[:24]
+    return {
+        "source": parsed.canonical, "label": parsed.canonical,
+        "content": _listing(parsed, page), "prose": "", "prose_authors": [],
+        "metadata": {
+            **{name: value for name, value in page.items() if name != "items"},
+            "provider": PLUGIN_NAME, "kind": parsed.kind, "source_ref": "claude", "scope_id": parsed.kind,
+            "trace_path": parsed.canonical, "context_subpath": f"claude/{key}.md",
+        },
+    }
+
+
+def resolve(target: str, context: dict) -> list[dict]:
+    parsed = _parse(target, context)
+    _require_live(context)
+    with ClaudeClient() as client:
+        if parsed.kind == "chat":
+            documents, payload = _read_chat(client, parsed)
+        else:
+            payload = _read(client, parsed)
+            documents = [_listing_document(parsed, payload)]
+    if parsed.options.get("output") == "json" and "file" not in parsed.options:
+        documents[0]["content"] = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    return documents
 
 
 def register_cli_options(command_name: str, command: Any) -> None:
@@ -166,8 +224,10 @@ def register_cli_options(command_name: str, command: Any) -> None:
         flag = "--claude-" + name.replace("_", "-")
         if flag in existing:
             continue
-        option_type = click.Choice(["transcript", "json"]) if name == "output" else (
-            int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens"} else str
+        option_type = (
+            click.Choice(["transcript", "json"]) if name == "output"
+            else click.Choice(["attach", "inline"]) if name == "files"
+            else int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens"} else str
         )
         command.params.append(click.Option([flag, "claude_" + name], type=option_type, default=None,
                                            help=f"claude.ai {name.replace('_', ' ')}; see cx-chats README."))
