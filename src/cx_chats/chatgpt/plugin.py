@@ -5,10 +5,11 @@ import json
 from typing import Any
 
 from ..files import ChatFile, file_document
+from ..tools import HEAD_TOKENS, TAIL_TOKENS, TOOL_MODES
 from ..transcript import iso_timestamp
 from .files import outputs, uploads
 from .public import PublicShareClient
-from .render import render_conversation
+from .render import render_conversation, render_tools
 from .service import read_page
 from .targets import Target, is_chatgpt_target, normalize_options, parse_target
 from .transport import ChatGPTClient
@@ -18,7 +19,11 @@ PLUGIN_NAME = "chatgpt"
 PLUGIN_PRIORITY = 100
 PLUGIN_KIND = "source"
 
-_CLI_OPTIONS = ("query", "after", "before", "limit", "offset", "cursor", "output", "file", "files")
+_CLI_OPTIONS = (
+    "query", "after", "before", "limit", "offset", "cursor", "output", "file", "files", "tool", "tools",
+    "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens",
+)
+_INTEGER_OPTIONS = {"limit", "offset", "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens"}
 
 
 def can_resolve(target: str, context: dict[str, Any]) -> bool:
@@ -111,6 +116,20 @@ def _conversation_file(client: ChatGPTClient, payload: dict, conversation_id: st
     return found[0]
 
 
+def _render(payload: dict, parsed: Target, base: str, **files: Any) -> tuple[str, dict, str, list[str], str | None]:
+    options = parsed.options
+    if "tool" in options:
+        content, metadata = render_tools(payload, options["tool"], target=base,
+                                         offset=options.get("result_offset", 0), tokens=options.get("result_tokens"))
+        return content, metadata, "", [], options["tool"]
+    content, metadata, prose, authors = render_conversation(
+        payload, tools=options.get("tools", "lines"), target=base,
+        head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
+        tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS), **files,
+    )
+    return content, metadata, prose, authors, None
+
+
 def resolve(target: str, context: dict) -> list[dict]:
     parsed = _parse(target, context)
     _require_live(context)
@@ -119,7 +138,8 @@ def resolve(target: str, context: dict) -> list[dict]:
     with client_type() as client:
         if parsed.kind == "share":
             payload = client.get(parsed.share_id)
-            content, metadata, prose, authors = render_conversation(payload)
+            base = Target("share", None, {}, parsed.share_id).canonical
+            content, metadata, prose, authors, tool = _render(payload, parsed, base)
             content = "Published share snapshot; completeness refers only to this snapshot, not the private conversation.\n\n" + content
             metadata.update({
                 "share_id": parsed.share_id, "authentication": "none",
@@ -127,7 +147,7 @@ def resolve(target: str, context: dict) -> list[dict]:
                 "capture_scope": "published_share_snapshot",
                 "backing_conversation_id": payload.get("backing_conversation_id"),
             })
-            key = f"shares/{parsed.share_id}"
+            key = f"shares/{parsed.share_id}" + (f"/{tool}" if tool else "")
         elif parsed.kind == "thread":
             payload = client.get(f"/conversation/{parsed.conversation_id}")
             returned_id = payload.get("conversation_id", payload.get("id"))
@@ -137,12 +157,13 @@ def resolve(target: str, context: dict) -> list[dict]:
             if "file" in parsed.options:
                 wanted = _conversation_file(client, payload, parsed.conversation_id, parsed.options["file"])
                 return [_file_document(parsed.conversation_id, wanted)]
-            attach = parsed.options.get("files", "attach") == "attach"
+            attach = parsed.options.get("files", "attach") == "attach" and "tool" not in parsed.options
             files = [
                 *uploads(client, payload, parsed.conversation_id), *outputs(client, payload, parsed.conversation_id),
             ] if attach else []
-            content, metadata, prose, authors = render_conversation(payload, attach_files=attach, files=files)
-            key = parsed.conversation_id
+            base = Target("thread", parsed.conversation_id, {}).canonical
+            content, metadata, prose, authors, tool = _render(payload, parsed, base, attach_files=attach, files=files)
+            key = parsed.conversation_id + (f"/{tool}" if tool else "")
         else:
             payload = read_page(client, parsed)
             entries = [_entry(item) for item in payload["items"]]
@@ -160,7 +181,7 @@ def resolve(target: str, context: dict) -> list[dict]:
             metadata = {key: value for key, value in payload.items() if key != "items"}
             prose, authors = "", []
             key = hashlib.sha256(parsed.canonical.encode()).hexdigest()[:24]
-        if parsed.options.get("output") == "json":
+        if parsed.options.get("output") == "json" and "tool" not in parsed.options:
             content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
         transcript = {
             "source": parsed.canonical, "label": metadata.get("title") or parsed.canonical,
@@ -189,7 +210,8 @@ def register_cli_options(command_name: str, command: Any) -> None:
         option_type = (
             click.Choice(["transcript", "json"]) if name == "output"
             else click.Choice(["attach", "inline"]) if name == "files"
-            else int if name in {"limit", "offset"} else str
+            else click.Choice(list(TOOL_MODES)) if name == "tools"
+            else int if name in _INTEGER_OPTIONS else str
         )
         command.params.append(click.Option([flag], type=option_type, default=None, help=f"ChatGPT {name}; see cx-chats README."))
 

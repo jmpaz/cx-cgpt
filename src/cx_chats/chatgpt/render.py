@@ -253,10 +253,15 @@ def _heading(role: str, messages: list[dict[str, Any]]) -> str:
     return "## " + " · ".join([role, *qualifiers, *([started] if started else [])])
 
 
-def _attachments(message: dict[str, Any]) -> list[str]:
+def _attachments(message: dict[str, Any], attached: dict[str, ChatFile]) -> list[str]:
     lines = []
     for attachment in _detail(message).get("attachments") or []:
         if not isinstance(attachment, dict):
+            continue
+        file = attached.get(str(attachment.get("id")))
+        if file is not None:
+            described = file.described()
+            lines.extend([f"Attachment: {label(file.label)}" + (f" ({described})" if described else ""), ""])
             continue
         details = [attachment.get("mime_type")]
         if isinstance(attachment.get("size"), int):
@@ -354,6 +359,7 @@ def render_conversation(
         lines.extend(["ChatGPT keeps no output for app (MCP) and web calls; their lines say so.", ""])
     if issues:
         lines.extend(["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""])
+    attached = {file.attachment_id: file for file in files if attach_files and file.attachment_id and file.content is not None}
     segments = Segments()
     prose_parts: list[str] = []
     authors: list[str] = []
@@ -369,7 +375,7 @@ def render_conversation(
             body = "\n\n".join(_text(_content(message)) for message in turn).strip()
             lines.extend([body, ""] if body else [])
             for message in turn:
-                lines.extend(_attachments(message))
+                lines.extend(_attachments(message, attached))
             segments.user(said, iso_timestamp(turn[0].get("create_time")),
                           dictated=_detail(turn[0]).get("dictation") is True)
             if said:
@@ -407,7 +413,7 @@ def render_conversation(
                 prose_parts.append(said)
                 if "assistant" not in authors:
                     authors.append("assistant")
-            lines.extend(_attachments(message))
+            lines.extend(_attachments(message, attached))
         if tools == "none" and summary_at is not None:
             lines[summary_at:summary_at] = [calls_summary(turn_calls), ""]
     if not any(not _hidden(message) for message in messages) and not issues:

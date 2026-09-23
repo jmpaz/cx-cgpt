@@ -7,9 +7,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import UUID
 
+from ..tools import TOOL_MODES, valid_handles
+
+_TOOL_OPTIONS = {"tool", "tools", "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens"}
 _OPTIONS = {
-    "thread": {"output", "file", "files"},
-    "share": {"output"},
+    "thread": {"output", "file", "files", *_TOOL_OPTIONS},
+    "share": {"output", *_TOOL_OPTIONS},
     "threads": {"after", "before", "limit", "offset", "output"},
     "search": {"query", "cursor", "after", "before", "limit", "offset", "output"},
 }
@@ -84,6 +87,22 @@ def normalize_options(
             )
     if options.get("limit", 1) > 100:
         raise ValueError("limit must be at most 100")
+    for key, minimum in (("result_head_tokens", 0), ("result_tail_tokens", 0), ("result_offset", 0), ("result_tokens", 1)):
+        if key not in options:
+            continue
+        value = options[key]
+        try:
+            options[key] = int(value) if not isinstance(value, bool) else None
+        except (TypeError, ValueError):
+            options[key] = None
+        if options[key] is None or options[key] < minimum:
+            raise ValueError(f"{key} must be an integer of at least {minimum}")
+    if "tool" in options and not valid_handles(options["tool"]):
+        raise ValueError("tool must be a handle such as t3 or a range such as t3-t9")
+    if "tools" in options and options["tools"] not in TOOL_MODES:
+        raise ValueError("tools must be lines, preview, or none")
+    if "tool" in options and "file" in options:
+        raise ValueError("file and tool read different parts of a conversation; give one")
     if "cursor" in options and (
         not isinstance(options["cursor"], str) or not options["cursor"]
     ):

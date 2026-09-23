@@ -149,7 +149,9 @@ def test_text_uploads_and_linked_sandbox_files_follow_the_transcript(fake_client
     text = transcript["content"]
     assert ("Files following the transcript:\n- uploads/notes.md\n- outputs/work/plan.md\n- outputs/index.html\n\n"
             "Files not included:\n- outputs/chart.png (image/png, 2,048 bytes): not text\n\n") in text
-    assert "photo.png (" not in text
+    assert "uploads/photo.png" not in text
+    assert "Attachment: photo.png (image/png, 4,096 bytes); not fetched" in text
+    assert "Attachment: uploads/notes.md (" in text
     assert "[the plan](outputs/work/plan.md)" in text
     assert text.index("Files following") < text.index("## user")
     assert fake_client.calls[1:] == [
@@ -384,3 +386,47 @@ def test_continuation_offset_is_not_reset_by_list_context(fake_client):
     fake_client.responses = [{"items": [{"id": ID, "title": "Second page"}], "total": 300}]
     plugin.list_targets("chatgpt:threads?limit=1&offset=100", {"list_limit": 1, "list_offset": 0})
     assert fake_client.calls[0][1]["offset"] == 100
+
+
+def conversation_with_call():
+    payload = conversation()
+    mapping = payload["mapping"]
+    mapping["call"] = {"parent": "question", "message": {
+        "id": "call", "author": {"role": "assistant"}, "recipient": "api_tool.call_tool",
+        "content": {"content_type": "code", "text": json.dumps({"path": "/App/link_1/search", "args": {"query": "seeds"}})},
+    }}
+    mapping["result"] = {"parent": "call", "message": {
+        "id": "result", "author": {"role": "tool", "name": "api_tool.call_tool"},
+        "content": {"content_type": "code", "text": "found " * 100},
+    }}
+    mapping["answer"]["parent"] = "result"
+    return payload
+
+
+def test_a_tool_call_reads_in_full_without_file_requests(fake_client):
+    fake_client.responses = [conversation_with_call()]
+    item, = plugin.resolve(f"chatgpt:thread/{ID}?tool=t1&result_tokens=20", {})
+    assert item["content"].startswith("# Example conversation · t1 App:search")
+    assert f"Continue: chatgpt:thread/{ID}?tool=t1&result_offset=20&result_tokens=20" in item["content"]
+    assert item["metadata"]["context_subpath"] == f"chatgpt/{ID}/t1.md"
+    assert fake_client.calls == [(f"/conversation/{ID}", None)]
+
+
+def test_tool_modes_reach_the_transcript(fake_client):
+    fake_client.responses = [conversation_with_call()]
+    item, = plugin.resolve(f"chatgpt:thread/{ID}?files=inline&tools=none", {})
+    assert "↪ 1 tool call [t1]: App:search" in item["content"]
+    assert f"read one in full with chatgpt:thread/{ID}?tool=t1" in item["content"]
+
+
+@pytest.mark.parametrize("query, message", [
+    ("tool=3", "tool must be a handle"),
+    ("tool=t4-t2", "tool must be a handle"),
+    ("tools=all", "tools must be lines, preview, or none"),
+    ("result_tokens=0", "result_tokens must be an integer of at least 1"),
+    ("tool=t1&file=outputs/a.md", "file and tool"),
+])
+def test_invalid_tool_options_fail_before_any_request(fake_client, query, message):
+    with pytest.raises(ValueError, match=message):
+        plugin.resolve(f"chatgpt:thread/{ID}?{query}", {})
+    assert fake_client.calls == []
