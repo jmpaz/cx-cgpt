@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Any
 
+from ..files import ChatFile, file_index, file_summary
 from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+
+SANDBOX_LINK = "sandbox:/mnt/data/"
 
 
 def _thoughts(content: Any) -> str:
@@ -171,6 +175,10 @@ def _record_turn(
 
 def render_conversation(
     payload: dict[str, Any],
+    *,
+    attach_files: bool = False,
+    files: Sequence[ChatFile] = (),
+    files_problem: str | None = None,
 ) -> tuple[str, dict[str, Any], str, list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("ChatGPT conversation payload must be an object")
@@ -197,6 +205,7 @@ def render_conversation(
             "",
         ]
     )
+    lines.extend(file_index(list(files), files_problem) if attach_files else [])
     status_at = len(lines)
     message_metadata, prose_parts, authors, models = [], [], [], []
     segments = Segments()
@@ -249,6 +258,8 @@ def render_conversation(
         )
         content = message.get("content")
         body, prose = _content(content)
+        if attach_files:
+            body = body.replace(SANDBOX_LINK, "outputs/")
         if _empty_tool_output(role, content):
             body = _unretained_output(content, detail, name)
         lines.extend([body, ""])
@@ -293,5 +304,7 @@ def render_conversation(
         "approx_tokens": approx_tokens(turns),
         "segments": turns,
         "media_fetched": False,
+        "files_mode": "attach" if attach_files else "inline",
+        "files": [file_summary(file) for file in files],
     }
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors

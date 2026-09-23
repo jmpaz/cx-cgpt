@@ -8,7 +8,8 @@ from collections.abc import Iterator, Sequence
 from typing import Any
 
 from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
-from .files import ChatFile, uploads
+from ..files import ChatFile, file_index, file_summary
+from .files import uploads
 
 ROOT_PARENT = "00000000-0000-4000-8000-000000000000"
 HEAD_TOKENS = 160
@@ -249,22 +250,6 @@ def _incomplete(issues: list[str]) -> list[str]:
     return ["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""] if issues else []
 
 
-def _file_index(files: list[ChatFile], outputs_problem: str | None) -> list[str]:
-    included = [file for file in files if file.content is not None]
-    omitted = [file for file in files if file.content is None]
-    lines = []
-    if included:
-        lines.extend(["Files following the transcript:", *[f"- {label(file.label)}" for file in included], ""])
-    if omitted:
-        lines.extend(["Files not included:", *[
-            f"- {label(file.label)}" + (f" ({file.described()})" if file.described() else "") + f": {label(file.omitted)}"
-            for file in omitted
-        ], ""])
-    if outputs_problem:
-        lines.extend([f"Output files could not be listed: {label(outputs_problem)}", ""])
-    return lines
-
-
 def render_conversation(
     payload: dict[str, Any], *, attach_files: bool = False, outputs: Sequence[ChatFile] = (),
     outputs_problem: str | None = None, head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
@@ -296,7 +281,7 @@ def render_conversation(
     )
     if summarized:
         lines.extend(["Reasoning: the service returned summaries only; raw thinking is hidden.", ""])
-    lines.extend(_file_index(files, outputs_problem))
+    lines.extend(file_index(files, outputs_problem))
     lines.extend(_incomplete(issues))
     segments = Segments()
     prose_parts: list[str] = []
@@ -382,11 +367,7 @@ def render_conversation(
         "segments": turns,
         "media_fetched": False,
         "files_mode": "attach" if attach_files else "inline",
-        "files": [
-            {"label": file.label, "origin": file.origin, "content_type": file.content_type, "size": file.size,
-             "created": file.created, "included": file.content is not None, "omitted": file.omitted}
-            for file in files
-        ],
+        "files": [file_summary(file) for file in files],
     }
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors
 

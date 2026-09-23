@@ -149,7 +149,7 @@ def test_unlisted_outputs_are_reported_without_failing_the_read(fake_client):
     fake_client.outputs = TransportError("claude.ai request failed (HTTP 503).")
     transcript, *files = plugin.resolve(f"claude:chat/{CONVERSATION}", {})
     assert [file["label"] for file in files] == ["uploads/pasted-1.txt", "uploads/notes.txt"]
-    assert "Output files could not be listed: claude.ai request failed (HTTP 503)." in transcript["content"]
+    assert "Files could not be listed: claude.ai request failed (HTTP 503)." in transcript["content"]
 
 
 def test_mismatched_conversation_is_rejected(fake_client):

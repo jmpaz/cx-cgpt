@@ -7,7 +7,8 @@ from typing import Any
 from ..http import TransportError
 from ..transcript import iso_timestamp
 from .client import ClaudeClient
-from .files import ChatFile, outputs, uploads
+from ..files import ChatFile, file_document
+from .files import outputs, uploads
 from .render import HEAD_TOKENS, TAIL_TOKENS, active_branch, render_conversation, render_tool
 from .service import read_page, read_search
 from .targets import Target, is_claude_target, normalize_options, parse_target
@@ -118,18 +119,10 @@ def list_targets(target: str, context: dict) -> dict:
 
 
 def _file_document(conversation_id: str, file: ChatFile) -> dict:
-    source = Target("chat", conversation_id, {"file": file.label}).canonical
-    return {
-        "source": source, "label": file.label, "content": file.content, "prose": "", "prose_authors": [],
-        "metadata": {
-            "provider": PLUGIN_NAME, "kind": "file", "conversation_id": conversation_id,
-            "origin": file.origin, "path": file.path, "content_type": file.content_type, "size": file.size,
-            "source_created": file.created, "attachment_id": file.attachment_id,
-            "source_url": f"https://claude.ai/chat/{conversation_id}", "source_ref": "claude",
-            "scope_id": conversation_id, "trace_path": source,
-            "context_subpath": f"claude/{conversation_id}/{file.label}",
-        },
-    }
+    return file_document(
+        file, provider=PLUGIN_NAME, source=Target("chat", conversation_id, {"file": file.label}).canonical,
+        conversation_id=conversation_id, source_url=f"https://claude.ai/chat/{conversation_id}",
+    )
 
 
 def _chat_file(client: ClaudeClient, payload: dict, conversation_id: str, wanted: str) -> ChatFile:
