@@ -3,8 +3,8 @@ from uuid import UUID
 
 import pytest
 
-from cx_cgpt import service
-from cx_cgpt.targets import parse_target
+from cx_chats.chatgpt import service
+from cx_chats.chatgpt.targets import parse_target
 
 
 def item(number, updated="2026-09-10T00:00:00Z"):
@@ -175,8 +175,8 @@ def test_repeated_cursor_at_page_boundary_does_not_publish_loop():
 
 
 def test_reported_total_is_not_an_account_census():
-    from cx_cgpt.service import read_page
-    from cx_cgpt.targets import parse_target
+    from cx_chats.chatgpt.service import read_page
+    from cx_chats.chatgpt.targets import parse_target
 
     class Client:
         def get(self, path, params):

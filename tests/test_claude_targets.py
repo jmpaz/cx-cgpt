@@ -1,6 +1,6 @@
 import pytest
 
-from cx_cgpt.claude.targets import is_claude_target, parse_target
+from cx_chats.claude.targets import is_claude_target, parse_target
 
 ID = "33333333-3333-4333-8333-333333333333"
 

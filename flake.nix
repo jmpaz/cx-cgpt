@@ -12,7 +12,7 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
           plugin = pkgs.python312Packages.buildPythonPackage {
-            pname = "cx-cgpt";
+            pname = "cx-chats";
             version = "0.1.0";
             pyproject = true;
             src = self;
@@ -20,11 +20,11 @@
             dependencies = with pkgs.python312Packages;
               [ click cryptography ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ secretstorage ];
             nativeCheckInputs = [ pkgs.python312Packages.pytestCheckHook ];
-            pythonImportsCheck = [ "cx_cgpt.plugin" "cx_cgpt.claude.plugin" ];
+            pythonImportsCheck = [ "cx_chats.chatgpt.plugin" "cx_chats.claude.plugin" ];
           };
         in {
           default = plugin;
-          cx-cgpt = plugin;
+          cx-chats = plugin;
         });
       checks = forSystems (system: { default = self.packages.${system}.default; });
       devShells = forSystems (system:

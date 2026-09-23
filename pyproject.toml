@@ -1,5 +1,5 @@
 [project]
-name = "cx-cgpt"
+name = "cx-chats"
 version = "0.1.0"
 description = "ChatGPT and claude.ai conversation sources for contextualize"
 readme = "README.md"
@@ -11,8 +11,8 @@ dependencies = [
 ]
 
 [project.entry-points."contextualize.plugins"]
-chatgpt = "cx_cgpt.plugin"
-claude = "cx_cgpt.claude.plugin"
+chatgpt = "cx_chats.chatgpt.plugin"
+claude = "cx_chats.claude.plugin"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

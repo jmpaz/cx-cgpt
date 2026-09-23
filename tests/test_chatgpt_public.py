@@ -4,8 +4,13 @@ import urllib.error
 
 import pytest
 
-from cx_cgpt import public
-from cx_cgpt.public import PublicShareClient, PublicShareError, parse_share_html
+from cx_chats.chatgpt import public
+from cx_chats.chatgpt.public import (
+    PublicShareClient,
+    PublicShareError,
+    parse_share_html,
+)
+from cx_chats.http import NoRedirect
 
 ID = "11111111-2222-4333-8444-555555555555"
 OTHER = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
@@ -149,7 +154,7 @@ def test_invalid_identifiers_do_not_request(identifier):
 
 
 def test_redirect_rejection():
-    assert public._NoRedirect().redirect_request(None, None, 302, '', {}, 'https://elsewhere.example') is None
+    assert NoRedirect().redirect_request(None, None, 302, '', {}, 'https://elsewhere.example') is None
 
 
 def test_response_cap(monkeypatch):

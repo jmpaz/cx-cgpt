@@ -5,7 +5,7 @@ import pytest
 from claude_payloads import CONVERSATION, conversation, tool_turn
 from click.testing import CliRunner
 
-from cx_cgpt.claude import plugin
+from cx_chats.claude import plugin
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
 
 
 def _thoughts(content: Any) -> str:

@@ -170,7 +170,7 @@ def register_cli_options(command_name: str, command: Any) -> None:
             int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens"} else str
         )
         command.params.append(click.Option([flag, "claude_" + name], type=option_type, default=None,
-                                           help=f"claude.ai {name.replace('_', ' ')}; see cx-cgpt README."))
+                                           help=f"claude.ai {name.replace('_', ' ')}; see cx-chats README."))
 
 
 def collect_cli_overrides(command_name: str, params: dict) -> dict | None:

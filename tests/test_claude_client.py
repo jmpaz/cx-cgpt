@@ -4,9 +4,9 @@ import urllib.error
 
 import pytest
 
-from cx_cgpt.claude.client import ClaudeClient
-from cx_cgpt.claude.session import Session
-from cx_cgpt.transport import TransportError
+from cx_chats.claude.client import ClaudeClient
+from cx_chats.claude.session import Session
+from cx_chats.http import TransportError
 
 ORG = "44444444-4444-4444-8444-444444444444"
 ID = "33333333-3333-4333-8333-333333333333"

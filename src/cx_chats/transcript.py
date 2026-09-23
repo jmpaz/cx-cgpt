@@ -29,6 +29,18 @@ def iso_timestamp(value: Any) -> str | None:
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def timestamp(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return float(value) if math.isfinite(value) else None
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def label(value: Any) -> str:
     return re.sub(r"[\r\n]+", " ", str(value))
 

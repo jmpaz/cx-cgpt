@@ -1,4 +1,4 @@
-# cx-cgpt
+# cx-chats
 
 [contextualize](https://github.com/jmpaz/contextualize) source plugins for
 ChatGPT and claude.ai conversations. The `chatgpt` source reads private history
@@ -14,16 +14,16 @@ fresh isolated installation from this checkout:
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python /path/to/contextualize /path/to/cx-cgpt
+uv pip install --python .venv/bin/python /path/to/contextualize /path/to/cx-chats
 .venv/bin/contextualize plugins
 ```
 
 The plugin should appear as the `chatgpt` and `claude` sources. Activate that environment
 before using the commands below, or invoke `.venv/bin/contextualize` directly.
 For a uv-managed command, use
-`uv tool install --with /path/to/cx-cgpt /path/to/contextualize`. When extending an
+`uv tool install --with /path/to/cx-chats /path/to/contextualize`. When extending an
 existing installation, preserve its other plugin dependencies. Installing
-cx-cgpt into an unrelated environment will not make it discoverable.
+cx-chats into an unrelated environment will not make it discoverable.
 The plugin has no dependency on a particular contextualize checkout.
 For private history, Codex must be on PATH and signed in with ChatGPT (`codex login`). Set
 `CX_CHATGPT_CODEX` to select another Codex executable; `CODEX_HOME` is inherited
@@ -273,7 +273,7 @@ uses the `claude` provider key.
 ## Troubleshooting
 
 - **The `chatgpt` source is absent:** run `contextualize plugins` using the
-  environment where cx-cgpt was installed. Check which `contextualize`
+  environment where cx-chats was installed. Check which `contextualize`
   executable your shell selects.
 - **Codex cannot start or requests time out:** check `codex --version` and
   `codex login status`. `CX_CHATGPT_CODEX` must identify a working executable;

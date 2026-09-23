@@ -12,9 +12,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-
-class TransportError(RuntimeError):
-    pass
+from ..http import NoRedirect, TransportError
 
 
 class CodexAuth:
@@ -33,7 +31,7 @@ class CodexAuth:
                 [self.executable, "app-server", "--listen", "stdio://"],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             )
-            self._request("initialize", {"clientInfo": {"name": "cx-cgpt", "version": "0.1.0"}})
+            self._request("initialize", {"clientInfo": {"name": "cx-chats", "version": "0.1.0"}})
             self._send({"method": "initialized"})
         except OSError:
             self.close()
@@ -91,7 +89,7 @@ class CodexAuth:
         result = self._request("getAuthStatus", {"includeToken": True, "refreshToken": refresh})
         token = result.get("authToken")
         if result.get("authMethod") != "chatgpt" or not isinstance(token, str) or not token:
-            raise TransportError("Sign in to ChatGPT with Codex on this machine before using cx-cgpt.")
+            raise TransportError("Sign in to ChatGPT with Codex on this machine before reading ChatGPT history.")
         return token
 
     def close(self) -> None:
@@ -117,11 +115,6 @@ class CodexAuth:
             process.stdout.close()
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def _account_id(token: str) -> str | None:
     try:
         payload = token.split(".")[1]
@@ -138,7 +131,7 @@ class ChatGPTClient:
                  auth: CodexAuth | None = None, opener: Any = None):
         self.auth = auth or CodexAuth(codex, timeout)
         self.timeout = timeout
-        self.opener = opener or urllib.request.build_opener(_NoRedirect())
+        self.opener = opener or urllib.request.build_opener(NoRedirect())
 
     def __enter__(self):
         return self
@@ -162,7 +155,7 @@ class ChatGPTClient:
         for attempt in range(2):
             token = self.auth.token(refresh=attempt == 1)
             headers = {"Authorization": "Bearer " + token, "Accept": "application/json",
-                       "User-Agent": "cx-cgpt/0.1.0", "originator": "cx-cgpt"}
+                       "User-Agent": "cx-chats/0.1.0", "originator": "cx-chats"}
             account = _account_id(token)
             if account:
                 headers["ChatGPT-Account-Id"] = account

@@ -1,12 +1,13 @@
-import sys
 import base64
 import io
 import json
+import sys
 import urllib.error
 
 import pytest
 
-from cx_cgpt.transport import ChatGPTClient, CodexAuth, TransportError, _NoRedirect
+from cx_chats.chatgpt.transport import ChatGPTClient, CodexAuth
+from cx_chats.http import NoRedirect, TransportError
 
 
 class FakeAuth:
@@ -71,7 +72,7 @@ def test_endpoint_allowlist_precedes_auth(path):
 
 
 def test_redirects_rejected():
-    assert _NoRedirect().redirect_request(None, None, 302, "redirect", {}, "https://elsewhere.example") is None
+    assert NoRedirect().redirect_request(None, None, 302, "redirect", {}, "https://elsewhere.example") is None
 
 
 def test_auth_login_error_redacted(monkeypatch):

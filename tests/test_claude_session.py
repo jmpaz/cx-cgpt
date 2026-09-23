@@ -5,8 +5,8 @@ from datetime import datetime, timezone
 import pytest
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from cx_cgpt.claude import session as claude_session
-from cx_cgpt.claude.session import SessionError, load_session
+from cx_chats.claude import session as claude_session
+from cx_chats.claude.session import SessionError, load_session
 
 ORG = "44444444-4444-4444-8444-444444444444"
 FUTURE = int((datetime(2100, 1, 1, tzinfo=timezone.utc) - datetime(1601, 1, 1, tzinfo=timezone.utc)).total_seconds() * 1e6)

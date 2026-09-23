@@ -1,7 +1,7 @@
 import pytest
 from claude_payloads import CONVERSATION, ROOT, block, conversation, message, tool_turn
 
-from cx_cgpt.claude.render import render_conversation, render_tool
+from cx_chats.claude.render import render_conversation, render_tool
 
 
 def test_tool_calls_render_in_order_with_handles_and_errors():

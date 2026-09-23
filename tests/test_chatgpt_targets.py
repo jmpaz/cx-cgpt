@@ -1,6 +1,6 @@
 import pytest
 
-from cx_cgpt.targets import is_chatgpt_target, normalize_options, parse_target
+from cx_chats.chatgpt.targets import is_chatgpt_target, normalize_options, parse_target
 
 ID = "11111111-1111-4111-8111-111111111111"
 

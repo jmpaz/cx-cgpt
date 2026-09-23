@@ -1,7 +1,7 @@
 import pytest
 
-from cx_cgpt.claude.service import read_page, read_search
-from cx_cgpt.claude.targets import parse_target
+from cx_chats.claude.service import read_page, read_search
+from cx_chats.claude.targets import parse_target
 
 
 def row(number, updated="2026-09-10T00:00:00Z"):

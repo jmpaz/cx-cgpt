@@ -4,9 +4,9 @@ import hashlib
 import json
 from typing import Any
 
+from ..transcript import iso_timestamp
 from .public import PublicShareClient
 from .render import render_conversation
-from .transcript import iso_timestamp
 from .service import read_page
 from .targets import Target, is_chatgpt_target, normalize_options, parse_target
 from .transport import ChatGPTClient
@@ -34,7 +34,7 @@ def _parse(raw: str, context: dict) -> Target:
 
 def _require_live(context: dict) -> None:
     if context.get("cache_only"):
-        raise ValueError("cx-cgpt reads live history; use a hydrated capture for offline reads")
+        raise ValueError("The chatgpt source reads live history; use a hydrated capture for offline reads")
 
 
 def classify_target(target: str, context: dict) -> dict | None:
@@ -158,7 +158,7 @@ def register_cli_options(command_name: str, command: Any) -> None:
         option_type = click.Choice(["transcript", "json"]) if name == "output" else (
             int if name in {"limit", "offset"} else str
         )
-        command.params.append(click.Option([flag], type=option_type, default=None, help=f"ChatGPT {name}; see cx-cgpt README."))
+        command.params.append(click.Option([flag], type=option_type, default=None, help=f"ChatGPT {name}; see cx-chats README."))
 
 
 def collect_cli_overrides(command_name: str, params: dict) -> dict | None:

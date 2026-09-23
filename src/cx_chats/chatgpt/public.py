@@ -7,7 +7,7 @@ import urllib.request
 from html.parser import HTMLParser
 from uuid import UUID
 
-from .transport import TransportError
+from ..http import NoRedirect, TransportError
 
 MAX_BYTES = 32 * 1024 * 1024
 MAX_TABLE_ENTRIES = 500_000
@@ -180,15 +180,10 @@ def parse_share_html(html, share_id):
     raise PublicShareError("Public share contains no shared conversation route.")
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 class PublicShareClient:
     def __init__(self, *, timeout=30, opener=None):
         self.timeout = timeout
-        self.opener = opener or urllib.request.build_opener(_NoRedirect())
+        self.opener = opener or urllib.request.build_opener(NoRedirect())
 
     def __enter__(self):
         return self
@@ -205,7 +200,7 @@ class PublicShareClient:
             raise PublicShareError("Public share IDs must be canonical UUIDs.")
         request = urllib.request.Request(
             f"https://chatgpt.com/share/{canonical}",
-            headers={"Accept": "text/html", "User-Agent": "cx-cgpt/0.1.0"},
+            headers={"Accept": "text/html", "User-Agent": "cx-chats/0.1.0"},
             method="GET",
         )
         try:

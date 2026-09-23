@@ -8,7 +8,7 @@ import urllib.request
 from collections.abc import Callable
 from typing import Any
 
-from ..transport import TransportError, _NoRedirect
+from ..http import NoRedirect, TransportError
 from .session import ORG_ENV, SESSION_ENV, Session, load_session
 
 ORIGIN = "https://claude.ai"
@@ -26,7 +26,7 @@ class ClaudeClient:
         self._load_session = session
         self._session: Session | None = None
         self.timeout = timeout
-        self.opener = opener or urllib.request.build_opener(_NoRedirect())
+        self.opener = opener or urllib.request.build_opener(NoRedirect())
 
     def __enter__(self):
         return self
@@ -75,7 +75,7 @@ class ClaudeClient:
         request = urllib.request.Request(
             ORIGIN + path + ("?" + query if query else ""),
             headers={"Cookie": "sessionKey=" + self.session.key, "Accept": "application/json",
-                     "User-Agent": "cx-cgpt/0.1.0"},
+                     "User-Agent": "cx-chats/0.1.0"},
             method="GET",
         )
         try:

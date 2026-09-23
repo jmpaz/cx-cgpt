@@ -1,4 +1,4 @@
-from cx_cgpt.render import render_conversation
+from cx_chats.chatgpt.render import render_conversation
 
 
 def message(identifier, role, content, **extra):

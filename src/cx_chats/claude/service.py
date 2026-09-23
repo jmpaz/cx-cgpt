@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from ..service import timestamp
+from ..transcript import timestamp
 from .targets import SEARCH_LIMIT, Target
 
 MAX_PAGES = 25
