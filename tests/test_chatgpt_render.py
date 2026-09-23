@@ -564,6 +564,20 @@ def test_status_placeholders_are_not_versions():
     assert "⑂" not in text and metadata["variants"] == []
 
 
+def test_an_assistant_heading_takes_the_time_of_what_the_turn_shows():
+    payload = conversation()
+    del payload["mapping"]["alternate"]
+    payload["mapping"]["answer"]["parent"] = "status"
+    payload["mapping"]["answer"]["message"]["create_time"] = 20
+    payload["mapping"]["status"] = {"id": "status", "parent": "question", "message": {
+        "id": "s", "author": {"role": "tool", "name": "a8km123"}, "create_time": 5,
+        "content": {"content_type": "text", "parts": [""]}, "metadata": {"model_slug": "example-model"},
+    }}
+    text, metadata, _, _ = render_conversation(payload)
+    assert "## assistant · example-model · 1970-01-01T00:00:20Z" in text
+    assert metadata["segments"][-1]["start_time"] == "1970-01-01T00:00:20Z"
+
+
 def test_the_map_outlines_every_version():
     payload = conversation()
     payload["mapping"]["follow"] = {"id": "follow", "parent": "alternate", "message": message("f", "user", "And then?")}

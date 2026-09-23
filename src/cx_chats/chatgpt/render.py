@@ -425,7 +425,10 @@ def render_conversation(
             segments.user("", iso_timestamp(turn[0].get("create_time")))
             continue
         turn = [message for message in turn if not _hidden(message)]
-        lines.extend([_heading(role, turn), ""])
+        shown_messages = turn if role == "user" else [
+            message for message in turn if _author(message)[0] == "assistant" or str(message.get("id")) in by_message
+        ]
+        lines.extend([_heading(role, shown_messages or turn), ""])
         for message in turn:
             key = key_of.get(id(message))
             if key in forks:
