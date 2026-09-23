@@ -69,6 +69,10 @@ def test_dates_and_pagination():
         "chatgpt:threads?query=x",
         "chatgpt:threads?output=csv",
         f"chatgpt:thread/{ID}?limit=2",
+        f"chatgpt:thread/{ID}?files=all",
+        f"chatgpt:thread/{ID}?file=/mnt/data/plan.md",
+        f"chatgpt:share/{ID}?file=outputs/plan.md",
+        "chatgpt:threads?files=inline",
         f"https://chatgpt.com/c/{ID}#branch",
         f"https://chatgpt.com/c/{ID}/extra",
         "chatgpt:threads?limit",
@@ -87,6 +91,13 @@ def test_invalid_integer_overrides(value):
 
 def test_output_is_universal():
     assert parse_target(f"chatgpt:{ID}?output=json").options == {"output": "json"}
+
+
+def test_thread_file_options_roundtrip():
+    target = parse_target(f"https://chatgpt.com/c/{ID}?file=outputs/work/plan.md&files=inline")
+    assert target.options == {"file": "outputs/work/plan.md", "files": "inline"}
+    assert target.canonical == f"chatgpt:thread/{ID}?file=outputs%2Fwork%2Fplan.md&files=inline"
+    assert parse_target(target.canonical) == target
 
 
 def test_opaque_search_cursor_roundtrips():

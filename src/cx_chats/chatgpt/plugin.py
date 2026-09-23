@@ -4,7 +4,9 @@ import hashlib
 import json
 from typing import Any
 
+from ..files import ChatFile, file_document
 from ..transcript import iso_timestamp
+from .files import outputs, uploads
 from .public import PublicShareClient
 from .render import render_conversation
 from .service import read_page
@@ -15,6 +17,8 @@ PLUGIN_API_VERSION = "1"
 PLUGIN_NAME = "chatgpt"
 PLUGIN_PRIORITY = 100
 PLUGIN_KIND = "source"
+
+_CLI_OPTIONS = ("query", "after", "before", "limit", "offset", "cursor", "output", "file", "files")
 
 
 def can_resolve(target: str, context: dict[str, Any]) -> bool:
@@ -91,10 +95,27 @@ def list_targets(target: str, context: dict) -> dict:
     return _envelope(page, context)
 
 
+def _file_document(conversation_id: str, file: ChatFile) -> dict:
+    return file_document(
+        file, provider=PLUGIN_NAME, source=Target("thread", conversation_id, {"file": file.label}).canonical,
+        conversation_id=conversation_id, source_url=f"https://chatgpt.com/c/{conversation_id}",
+    )
+
+
+def _conversation_file(client: ChatGPTClient, payload: dict, conversation_id: str, wanted: str) -> ChatFile:
+    found = (uploads if wanted.startswith("uploads/") else outputs)(client, payload, conversation_id, only=wanted)
+    if not found:
+        raise ValueError(f"No file {wanted} in this conversation; the transcript's header lists its files.")
+    if found[0].content is None:
+        raise ValueError(f"{wanted} is not included: {found[0].omitted}.")
+    return found[0]
+
+
 def resolve(target: str, context: dict) -> list[dict]:
     parsed = _parse(target, context)
     _require_live(context)
     client_type = PublicShareClient if parsed.kind == "share" else ChatGPTClient
+    files: list[ChatFile] = []
     with client_type() as client:
         if parsed.kind == "share":
             payload = client.get(parsed.share_id)
@@ -113,7 +134,14 @@ def resolve(target: str, context: dict) -> list[dict]:
             if returned_id is not None and returned_id != parsed.conversation_id:
                 raise ValueError("ChatGPT returned a different conversation ID")
             payload = {**payload, "conversation_id": parsed.conversation_id}
-            content, metadata, prose, authors = render_conversation(payload)
+            if "file" in parsed.options:
+                wanted = _conversation_file(client, payload, parsed.conversation_id, parsed.options["file"])
+                return [_file_document(parsed.conversation_id, wanted)]
+            attach = parsed.options.get("files", "attach") == "attach"
+            files = [
+                *uploads(client, payload, parsed.conversation_id), *outputs(client, payload, parsed.conversation_id),
+            ] if attach else []
+            content, metadata, prose, authors = render_conversation(payload, attach_files=attach, files=files)
             key = parsed.conversation_id
         else:
             payload = read_page(client, parsed)
@@ -134,7 +162,7 @@ def resolve(target: str, context: dict) -> list[dict]:
             key = hashlib.sha256(parsed.canonical.encode()).hexdigest()[:24]
         if parsed.options.get("output") == "json":
             content = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-        return [{
+        transcript = {
             "source": parsed.canonical, "label": metadata.get("title") or parsed.canonical,
             "content": content, "prose": prose, "prose_authors": authors,
             "metadata": {
@@ -142,7 +170,10 @@ def resolve(target: str, context: dict) -> list[dict]:
                 "source_ref": "chatgpt", "scope_id": parsed.share_id or parsed.conversation_id or parsed.kind,
                 "trace_path": parsed.canonical, "context_subpath": f"chatgpt/{key}.md",
             },
-        }]
+        }
+        return [transcript, *[
+            _file_document(parsed.conversation_id, file) for file in files if file.content is not None
+        ]]
 
 
 def register_cli_options(command_name: str, command: Any) -> None:
@@ -151,12 +182,14 @@ def register_cli_options(command_name: str, command: Any) -> None:
     import click
 
     existing = {opt for param in command.params for opt in getattr(param, "opts", ())}
-    for name in ("query", "after", "before", "limit", "offset", "cursor", "output"):
+    for name in _CLI_OPTIONS:
         flag = f"--chatgpt-{name}"
         if flag in existing:
             continue
-        option_type = click.Choice(["transcript", "json"]) if name == "output" else (
-            int if name in {"limit", "offset"} else str
+        option_type = (
+            click.Choice(["transcript", "json"]) if name == "output"
+            else click.Choice(["attach", "inline"]) if name == "files"
+            else int if name in {"limit", "offset"} else str
         )
         command.params.append(click.Option([flag], type=option_type, default=None, help=f"ChatGPT {name}; see cx-chats README."))
 
@@ -165,6 +198,5 @@ def collect_cli_overrides(command_name: str, params: dict) -> dict | None:
     if command_name not in {"cat", "hydrate", "payload"}:
         return None
     return {
-        key: params[f"chatgpt_{key}"] for key in ("query", "after", "before", "limit", "offset", "cursor", "output")
-        if params.get(f"chatgpt_{key}") is not None
+        key: params[f"chatgpt_{key}"] for key in _CLI_OPTIONS if params.get(f"chatgpt_{key}") is not None
     } or None

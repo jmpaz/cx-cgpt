@@ -5,6 +5,7 @@ import pytest
 from click.testing import CliRunner
 
 from cx_chats.chatgpt import plugin, service
+from cx_chats.http import TransportError
 
 ID = "11111111-1111-4111-8111-111111111111"
 OTHER_ID = "22222222-2222-4222-8222-222222222222"
@@ -49,6 +50,26 @@ def fake_client(monkeypatch):
             assert self.responses, "Unexpected network request"
             return self.responses.pop(0)
 
+        def sandbox_file(self, conversation_id, message_id, path):
+            self.calls.append(("sandbox_file", message_id, path))
+            if isinstance(self.files[path], Exception):
+                raise self.files[path]
+            return self.files[path]
+
+        def uploaded_file(self, conversation_id, file_id):
+            self.calls.append(("uploaded_file", file_id))
+            if isinstance(self.files[file_id], Exception):
+                raise self.files[file_id]
+            return self.files[file_id]
+
+        def download(self, url, *, limit):
+            self.calls.append(("download", url))
+            if isinstance(self.downloads[url], Exception):
+                raise self.downloads[url]
+            return self.downloads[url]
+
+    Client.files = {}
+    Client.downloads = {}
     monkeypatch.setattr(plugin, "ChatGPTClient", Client)
     return Client
 
@@ -71,6 +92,126 @@ def test_thread_alias_resolution_preserves_provenance(target, fake_client):
     assert item["metadata"]["approx_tokens"] == 12
     assert fake_client.calls == [(f"/conversation/{ID}", None)]
     assert fake_client.closed == 1
+
+
+def sandbox_info(name, mime_type, size=None):
+    return {"status": "success", "download_url": f"https://chatgpt.com/backend-api/estuary/content?id={name}&sig=x",
+            "file_name": name, "file_size_bytes": size, "mime_type": mime_type, "creation_time": None,
+            "metadata": {"file_id": f"file_{name}"}}
+
+
+def conversation_with_files(fake_client):
+    payload = conversation()
+    payload["current_node"] = "summary"
+    payload["mapping"]["question"]["message"]["metadata"] = {"attachments": [
+        {"id": "file_notes", "name": "notes.md", "mime_type": "text/markdown", "size": 6},
+        {"id": "file_photo", "name": "photo.png", "mime_type": "image/png", "size": 4096},
+    ]}
+    payload["mapping"]["answer"]["message"]["content"]["parts"] = [
+        "Wrote [the plan](sandbox:/mnt/data/work/plan.md), [a chart](sandbox:/mnt/data/chart.png), "
+        "and [the page](sandbox:/mnt/data/index.html)."
+    ]
+    payload["mapping"]["code"] = {"parent": "answer", "message": {
+        "id": "code", "author": {"role": "assistant"}, "recipient": "python",
+        "content": {"content_type": "code", "text": "open('sandbox:/mnt/data/scratch.txt')"},
+    }}
+    payload["mapping"]["summary"] = {"parent": "code", "message": {
+        "id": "summary", "author": {"role": "assistant"},
+        "content": {"content_type": "text", "parts": ["The [plan](sandbox:/mnt/data/work/plan.md) is final."]},
+    }}
+    fake_client.responses = [payload]
+    fake_client.files = {
+        "file_notes": sandbox_info("notes.md", None, 6),
+        "/mnt/data/work/plan.md": sandbox_info("plan.md", "text/markdown"),
+        "/mnt/data/chart.png": sandbox_info("chart.png", "image/png", 2048),
+        "/mnt/data/index.html": sandbox_info("index(3).html", None),
+    }
+    fake_client.downloads = {
+        fake_client.files["file_notes"]["download_url"]: b"notes\n",
+        fake_client.files["/mnt/data/work/plan.md"]["download_url"]: b"# Plan\n",
+        fake_client.files["/mnt/data/index.html"]["download_url"]: b"<h1>Page</h1>\n",
+    }
+
+
+def test_text_uploads_and_linked_sandbox_files_follow_the_transcript(fake_client):
+    conversation_with_files(fake_client)
+    transcript, *files = plugin.resolve(f"https://chatgpt.com/c/{ID}", {})
+    assert [(file["label"], file["content"]) for file in files] == [
+        ("uploads/notes.md", "notes\n"), ("outputs/work/plan.md", "# Plan\n"), ("outputs/index.html", "<h1>Page</h1>\n"),
+    ]
+    output = files[1]
+    assert output["source"] == f"chatgpt:thread/{ID}?file=outputs%2Fwork%2Fplan.md"
+    assert output["metadata"]["context_subpath"] == f"chatgpt/{ID}/outputs/work/plan.md"
+    assert output["metadata"]["source_url"] == f"https://chatgpt.com/c/{ID}"
+    assert output["metadata"]["path"] == "/mnt/data/work/plan.md"
+    assert (output["metadata"]["provider"], output["metadata"]["kind"]) == ("chatgpt", "file")
+    assert files[0]["metadata"]["attachment_id"] == "file_notes"
+    text = transcript["content"]
+    assert ("Files following the transcript:\n- uploads/notes.md\n- outputs/work/plan.md\n- outputs/index.html\n\n"
+            "Files not included:\n- outputs/chart.png (image/png, 2,048 bytes): not text\n\n") in text
+    assert "photo.png (" not in text
+    assert "[the plan](outputs/work/plan.md)" in text
+    assert text.index("Files following") < text.index("## user")
+    assert fake_client.calls[1:] == [
+        ("uploaded_file", "file_notes"),
+        ("download", fake_client.files["file_notes"]["download_url"]),
+        ("sandbox_file", "answer", "/mnt/data/work/plan.md"),
+        ("download", fake_client.files["/mnt/data/work/plan.md"]["download_url"]),
+        ("sandbox_file", "answer", "/mnt/data/chart.png"),
+        ("sandbox_file", "answer", "/mnt/data/index.html"),
+        ("download", fake_client.files["/mnt/data/index.html"]["download_url"]),
+    ]
+    assert transcript["metadata"]["files"][2] == {
+        "label": "outputs/chart.png", "origin": "output", "content_type": "image/png", "size": 2048,
+        "created": None, "included": False, "omitted": "not text",
+    }
+    assert transcript["metadata"]["files"][3]["size"] == 14
+
+
+def test_inline_files_keep_sandbox_links_and_make_no_file_requests(fake_client):
+    conversation_with_files(fake_client)
+    transcript, = plugin.resolve(f"chatgpt:thread/{ID}?files=inline", {})
+    assert "[the plan](sandbox:/mnt/data/work/plan.md)" in transcript["content"]
+    assert "Files following" not in transcript["content"]
+    assert fake_client.calls == [(f"/conversation/{ID}", None)]
+
+
+def test_one_file_reads_by_the_label_the_transcript_lists(fake_client):
+    conversation_with_files(fake_client)
+    output, = plugin.resolve(f"chatgpt:thread/{ID}?file=outputs/work/plan.md", {})
+    assert (output["label"], output["content"]) == ("outputs/work/plan.md", "# Plan\n")
+    assert fake_client.calls[1:] == [
+        ("sandbox_file", "answer", "/mnt/data/work/plan.md"),
+        ("download", fake_client.files["/mnt/data/work/plan.md"]["download_url"]),
+    ]
+    fake_client.calls.clear()
+    conversation_with_files(fake_client)
+    upload, = plugin.resolve(f"chatgpt:thread/{ID}?file=uploads/notes.md", {})
+    assert upload["content"] == "notes\n"
+    assert fake_client.calls[1:] == [
+        ("uploaded_file", "file_notes"), ("download", fake_client.files["file_notes"]["download_url"]),
+    ]
+    conversation_with_files(fake_client)
+    with pytest.raises(ValueError, match="outputs/chart.png is not included: not text"):
+        plugin.resolve(f"chatgpt:thread/{ID}?file=outputs/chart.png", {})
+    conversation_with_files(fake_client)
+    with pytest.raises(ValueError, match="No file outputs/scratch.txt"):
+        plugin.resolve(f"chatgpt:thread/{ID}?file=outputs/scratch.txt", {})
+
+
+def test_unavailable_files_are_reported_without_failing_the_read(fake_client):
+    conversation_with_files(fake_client)
+    fake_client.files["/mnt/data/index.html"] = TransportError("ChatGPT could not provide the file (ace_pod_expired).")
+    plan_url = fake_client.files["/mnt/data/work/plan.md"]["download_url"]
+    fake_client.downloads[plan_url] = TransportError("ChatGPT request failed (HTTP 403).")
+    fake_client.files["file_notes"] = TransportError("ChatGPT request failed (HTTP 404).")
+    transcript, = plugin.resolve(f"chatgpt:thread/{ID}", {})
+    assert ("Files not included:\n"
+            "- uploads/notes.md (text/markdown, 6 bytes): download failed: ChatGPT request failed (HTTP 404).\n"
+            "- outputs/work/plan.md (text/markdown): download failed: ChatGPT request failed (HTTP 403).\n"
+            "- outputs/chart.png (image/png, 2,048 bytes): not text\n"
+            "- outputs/index.html: download failed: ChatGPT could not provide the file (ace_pod_expired).\n"
+            ) in transcript["content"]
 
 
 @pytest.mark.parametrize("target", [f"chatgpt:{ID}", "chatgpt:threads", "chatgpt:search?query=moodbox"])

@@ -13,6 +13,16 @@ import urllib.request
 from typing import Any
 
 from ..http import NoRedirect, TransportError
+from ..transcript import label
+
+BACKEND_ORIGIN = "https://chatgpt.com"
+BACKEND = BACKEND_ORIGIN + "/backend-api"
+DOWNLOAD_PATH = "/backend-api/estuary/content"
+MAX_BYTES = 64 * 1024 * 1024
+_UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
+_ENDPOINT = re.compile(
+    rf"/conversations(?:/search)?|/conversation/{_UUID}(?:/interpreter/download)?|/files/download/file[-_][0-9A-Za-z]+"
+)
 
 
 class CodexAuth:
@@ -126,6 +136,13 @@ def _account_id(token: str) -> str | None:
         return None
 
 
+def _provided(info: dict) -> dict:
+    if info.get("status") != "success":
+        reason = info.get("error_code") or info.get("status")
+        raise TransportError("ChatGPT could not provide the file" + (f" ({label(reason)})." if reason else "."))
+    return info
+
+
 class ChatGPTClient:
     def __init__(self, *, codex: str | None = None, timeout: float = 30,
                  auth: CodexAuth | None = None, opener: Any = None):
@@ -143,18 +160,43 @@ class ChatGPTClient:
         self.auth.close()
 
     def get(self, path: str, params: dict | None = None) -> dict:
-        if path not in {"/conversations", "/conversations/search"} and not re.fullmatch(
-            r"/conversation/[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", path
-        ):
-            raise TransportError("Unsupported ChatGPT history endpoint.")
+        if not _ENDPOINT.fullmatch(path):
+            raise TransportError("Unsupported ChatGPT endpoint.")
         query = urllib.parse.urlencode({
             key: str(value).lower() if isinstance(value, bool) else value
             for key, value in (params or {}).items() if value is not None
         })
-        url = "https://chatgpt.com/backend-api" + path + ("?" + query if query else "")
+        content = self._fetch(BACKEND + path + ("?" + query if query else ""),
+                              accept="application/json", limit=MAX_BYTES)
+        try:
+            result = json.loads(content)
+        except (ValueError, UnicodeDecodeError):
+            raise TransportError("ChatGPT returned invalid JSON.") from None
+        if not isinstance(result, dict):
+            raise TransportError("ChatGPT returned an unexpected response shape.")
+        return result
+
+    def sandbox_file(self, conversation_id: str, message_id: str, path: str) -> dict:
+        return _provided(self.get(f"/conversation/{conversation_id}/interpreter/download",
+                                  {"message_id": message_id, "sandbox_path": path}))
+
+    def uploaded_file(self, conversation_id: str, file_id: str) -> dict:
+        return _provided(self.get(f"/files/download/{file_id}", {"conversation_id": conversation_id}))
+
+    def download(self, url: Any, *, limit: int) -> bytes:
+        try:
+            parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+        except ValueError:
+            parts = None
+        if (parts is None or (parts.scheme, parts.netloc, parts.path) != ("https", "chatgpt.com", DOWNLOAD_PATH)
+                or not parts.query or parts.fragment or not parts.query.isprintable() or " " in parts.query):
+            raise TransportError("Refusing to send the ChatGPT token to an unexpected download URL.")
+        return self._fetch(BACKEND_ORIGIN + DOWNLOAD_PATH + "?" + parts.query, accept="*/*", limit=limit)
+
+    def _fetch(self, url: str, *, accept: str, limit: int) -> bytes:
         for attempt in range(2):
             token = self.auth.token(refresh=attempt == 1)
-            headers = {"Authorization": "Bearer " + token, "Accept": "application/json",
+            headers = {"Authorization": "Bearer " + token, "Accept": accept,
                        "User-Agent": "cx-chats/0.1.0", "originator": "cx-chats"}
             account = _account_id(token)
             if account:
@@ -162,21 +204,16 @@ class ChatGPTClient:
             request = urllib.request.Request(url, headers=headers, method="GET")
             try:
                 with self.opener.open(request, timeout=self.timeout) as response:
-                    content = response.read(64 * 1024 * 1024 + 1)
-                if len(content) > 64 * 1024 * 1024:
-                    raise TransportError("ChatGPT response exceeded the 64 MiB size limit.")
-                result = json.loads(content)
-                if not isinstance(result, dict):
-                    raise TransportError("ChatGPT returned an unexpected response shape.")
-                return result
+                    content = response.read(limit + 1)
             except urllib.error.HTTPError as error:
                 status = error.code
                 error.close()
                 if status == 401 and attempt == 0:
                     continue
-                raise TransportError(f"ChatGPT history request failed (HTTP {status}).") from None
+                raise TransportError(f"ChatGPT request failed (HTTP {status}).") from None
             except (urllib.error.URLError, TimeoutError, OSError):
-                raise TransportError("ChatGPT history request failed; check network connectivity.") from None
-            except (ValueError, UnicodeDecodeError):
-                raise TransportError("ChatGPT returned invalid JSON.") from None
+                raise TransportError("ChatGPT request failed; check network connectivity.") from None
+            if len(content) > limit:
+                raise TransportError(f"ChatGPT response exceeded the size limit of {limit:,} bytes.")
+            return content
         raise TransportError("ChatGPT authentication failed after refresh.")

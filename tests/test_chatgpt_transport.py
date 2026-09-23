@@ -6,6 +6,7 @@ import urllib.error
 
 import pytest
 
+from cx_chats.chatgpt.files import outputs
 from cx_chats.chatgpt.transport import ChatGPTClient, CodexAuth
 from cx_chats.http import NoRedirect, TransportError
 
@@ -62,13 +63,94 @@ def test_errors_redact_server_content():
     assert auth.calls == [False]
 
 
-@pytest.mark.parametrize("path", ["https://evil.example/conversations", "/conversations/../account", "/conversation/not-a-uuid", "/conversations?x=1"])
+@pytest.mark.parametrize("path", [
+    "https://evil.example/conversations", "/conversations/../account", "/conversation/not-a-uuid", "/conversations?x=1",
+    "/files/download/file_1/../account", "/files/download/account", "/estuary/content",
+])
 def test_endpoint_allowlist_precedes_auth(path):
     auth = FakeAuth()
     with ChatGPTClient(auth=auth) as client:
         with pytest.raises(TransportError, match="Unsupported"):
             client.get(path)
     assert auth.calls == []
+
+
+CONVERSATION = "11111111-1111-4111-8111-111111111111"
+DOWNLOAD = "https://chatgpt.com/backend-api/estuary/content?id=file_1&sig=abc"
+
+
+def test_sandbox_file_reads_its_info_then_its_bytes_with_the_same_headers():
+    info = {"status": "success", "download_url": DOWNLOAD, "mime_type": "text/markdown"}
+    opener = FakeOpener([json.dumps(info).encode(), b"# Plan\n"])
+    with ChatGPTClient(auth=FakeAuth(), opener=opener) as client:
+        assert client.sandbox_file(CONVERSATION, "message", "/mnt/data/plan.md") == info
+        assert client.download(info["download_url"], limit=100) == b"# Plan\n"
+    described, fetched = opener.requests
+    assert described.full_url == (f"https://chatgpt.com/backend-api/conversation/{CONVERSATION}/interpreter/download"
+                                  "?message_id=message&sandbox_path=%2Fmnt%2Fdata%2Fplan.md")
+    assert fetched.full_url == DOWNLOAD
+    assert fetched.get_header("Authorization") == described.get_header("Authorization")
+    assert fetched.get_header("Chatgpt-account-id") == "account-example"
+    assert fetched.get_header("User-agent") == "cx-chats/0.1.0"
+
+
+def test_uploaded_file_reads_its_info_by_file_id():
+    opener = FakeOpener([json.dumps({"status": "success", "download_url": DOWNLOAD}).encode()])
+    with ChatGPTClient(auth=FakeAuth(), opener=opener) as client:
+        assert client.uploaded_file(CONVERSATION, "file_00ab")["download_url"] == DOWNLOAD
+    assert opener.requests[0].full_url == (
+        f"https://chatgpt.com/backend-api/files/download/file_00ab?conversation_id={CONVERSATION}"
+    )
+
+
+def test_sandbox_file_errors_name_the_service_reason():
+    opener = FakeOpener([b'{"status": "error", "error_code": "ace_pod_expired", "error_message": null}'])
+    with ChatGPTClient(auth=FakeAuth(), opener=opener) as client:
+        with pytest.raises(TransportError, match=r"could not provide the file \(ace_pod_expired\)"):
+            client.sandbox_file(CONVERSATION, "message", "/mnt/data/plan.md")
+
+
+def test_download_stops_reading_at_the_limit():
+    with ChatGPTClient(auth=FakeAuth(), opener=FakeOpener([b"x" * 11])) as client:
+        with pytest.raises(TransportError, match="size limit of 10 bytes"):
+            client.download(DOWNLOAD, limit=10)
+
+
+@pytest.mark.parametrize("url", [
+    None,
+    "https://evil.example/backend-api/estuary/content?id=file_1",
+    "https://chatgpt.com.evil.example/backend-api/estuary/content?id=file_1",
+    "https://user@chatgpt.com/backend-api/estuary/content?id=file_1",
+    "https://chatgpt.com:8443/backend-api/estuary/content?id=file_1",
+    "http://chatgpt.com/backend-api/estuary/content?id=file_1",
+    "https://chatgpt.com/backend-api/estuary/content",
+    "https://chatgpt.com/backend-api/estuary/content/../files?id=file_1",
+    "https://chatgpt.com/backend-api/conversations?id=file_1",
+    "https://chatgpt.com/backend-api/estuary/content?id=file_1#fragment",
+    "https://chatgpt.com/backend-api/estuary/content?id=file 1",
+])
+def test_download_refuses_other_urls_before_auth(url):
+    auth = FakeAuth()
+    with ChatGPTClient(auth=auth, opener=FakeOpener([])) as client:
+        with pytest.raises(TransportError, match="unexpected download URL"):
+            client.download(url, limit=10)
+    assert auth.calls == []
+
+
+def test_foreign_download_url_leaves_the_file_out_without_sending_the_token():
+    payload = {"current_node": "answer", "mapping": {
+        "answer": {"parent": None, "message": {
+            "id": "answer", "author": {"role": "assistant"},
+            "content": {"content_type": "text", "parts": ["[plan](sandbox:/mnt/data/plan.md)"]},
+        }},
+    }}
+    info = {"status": "success", "download_url": "https://evil.example/estuary/content?id=file_1"}
+    opener = FakeOpener([json.dumps(info).encode()])
+    with ChatGPTClient(auth=FakeAuth(), opener=opener) as client:
+        file, = outputs(client, payload, CONVERSATION)
+    assert file.content is None
+    assert file.omitted == "download failed: Refusing to send the ChatGPT token to an unexpected download URL."
+    assert [request.host for request in opener.requests] == ["chatgpt.com"]
 
 
 def test_redirects_rejected():

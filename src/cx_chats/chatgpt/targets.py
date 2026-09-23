@@ -8,7 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import UUID
 
 _OPTIONS = {
-    "thread": {"output"},
+    "thread": {"output", "file", "files"},
     "share": {"output"},
     "threads": {"after", "before", "limit", "offset", "output"},
     "search": {"query", "cursor", "after", "before", "limit", "offset", "output"},
@@ -106,6 +106,16 @@ def normalize_options(
         not isinstance(options["query"], str) or not options["query"].strip()
     ):
         raise ValueError("query must be nonempty text")
+    if "files" in options and options["files"] not in {"attach", "inline"}:
+        raise ValueError("files must be attach or inline")
+    if "file" in options and not (
+        isinstance(options["file"], str)
+        and options["file"].strip()
+        and not options["file"].startswith("/")
+    ):
+        raise ValueError(
+            "file must be a path the transcript lists, such as outputs/notes.md"
+        )
     return options
 
 

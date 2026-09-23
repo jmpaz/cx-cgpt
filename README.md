@@ -75,7 +75,7 @@ message.
 
 `?output=json` returns the conversation object, including alternative branches
 present in its mapping. Attachment references and structured media parts are
-preserved, but attachment and media bytes are not downloaded. Historical
+preserved; images and other media are not downloaded. Historical
 message text is source material, not instructions to the consuming agent.
 
 ### Tool calls
@@ -92,6 +92,20 @@ output for app (MCP) and web calls, and those lines say so.
   `?tools=none` only counts each turn's calls.
 
 The claude.ai source takes the same options.
+
+### Files
+
+A conversation's text files come after its transcript, one document per file:
+text files uploaded into a message as `uploads/<name>`, and files ChatGPT wrote
+and linked from a reply as `outputs/<path>`, with those links pointing at them.
+The transcript header lists them. Binary outputs, files over 2 MiB, and files
+ChatGPT no longer has are listed there with the reason instead. Uploaded images
+and other binary uploads stay as attachment references in their message.
+`metadata.files` lists each file with its origin, type, size, and whether it
+was included.
+
+`?file=<path>` reads one of them. `?files=inline` returns the transcript alone,
+with its links unchanged and no files fetched.
 
 ## Read a public share
 
@@ -172,9 +186,10 @@ count of date matches. Searches do not
 invent a total count.
 
 CLI equivalents `--chatgpt-query`, `--chatgpt-after`, `--chatgpt-before`,
-`--chatgpt-limit`, `--chatgpt-offset`, `--chatgpt-cursor`, and
-`--chatgpt-output` override target options. Manifest configuration uses the
-`chatgpt` provider key. Unknown or inapplicable options are rejected.
+`--chatgpt-limit`, `--chatgpt-offset`, `--chatgpt-cursor`, `--chatgpt-output`,
+`--chatgpt-file`, and `--chatgpt-files` override target options. Manifest
+configuration uses the `chatgpt` provider key. Unknown or inapplicable options
+are rejected.
 
 ## Authentication and capture
 
@@ -184,7 +199,9 @@ calls `getAuthStatus` with `includeToken` to obtain a session token in memory.
 Codex owns credential storage and refresh;
 the plugin does not read credential files or implement OAuth refresh. Requests
 are then issued by the plugin directly to the fixed HTTPS ChatGPT backend
-history endpoints, authorized with that token. Codex supplies authentication;
+history and file endpoints, authorized with that token. A file's bytes are
+fetched only from ChatGPT's own `https://chatgpt.com/backend-api/estuary/content`
+address; any other download address is refused. Codex supplies authentication;
 it does not proxy the history response or run a model to retrieve it. One HTTP
 401 triggers a refresh request through Codex and one retry. Tokens are not written to captures
 or error messages, and HTTP redirects are rejected.
