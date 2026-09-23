@@ -45,27 +45,28 @@ account. A URL does not grant access to someone else's private conversation.
 Custom GPT `/g/` or gizmo URLs are not supported; use a supported
 `/c/<conversation-id>` address for an accessible private conversation.
 
-`chatgpt:UUID` is also accepted. Transcripts retain the title, conversation and
-message identities, timestamps, speaker roles, model names, tool messages, and
-structured content. Where the service retained no output for a tool message,
-the transcript states that in place of the empty body, naming the invoked app
-or tool when the metadata names one. They follow `current_node` back through
-its ancestors: this is the selected branch, not an interleaving of alternative
-responses.
-Broken or missing ancestry is explicitly marked incomplete. Nothing is clipped
-by the plugin; contextualize's own output limits still apply.
+`chatgpt:UUID` is also accepted. A transcript follows `current_node` back
+through its ancestors: the selected branch, not an interleaving of alternative
+responses. Each turn has one heading: `## user · <time>`, marked `dictated`
+when the message was dictated, and `## assistant · <model> · <time>`, naming
+the model that wrote that reply. Within a turn come thought summaries as `>`
+quotes, commentary, tool calls, and the reply. Citations become their links and
+writing blocks become titled Markdown documents. System messages, custom
+instructions, and messages hidden from the conversation are left out;
+`metadata.messages` keeps their provenance. Broken or missing ancestry is
+marked incomplete under the header. Nothing is clipped by the plugin;
+contextualize's own output limits still apply.
 
 Resolved conversations and public shares carry `metadata.segments`: one entry
 per conversational turn on the selected branch, each with `index`, `role`
 (`user` or `assistant`), `text`, `start_time` (the message's create time in
-ISO-8601 UTC, null when the message has none), and `tools`, so downstream
-indexers can store turns as searchable segments. An assistant turn spans the
+ISO-8601 UTC, null when the message has none), and `tools`; assistant turns add
+`model` and dictated user turns `dictated: true`. Downstream
+indexers store turns as searchable segments. An assistant turn spans the
 reasoning, tool calls, tool results, and reply that belong to it, and its `text`
 is the reply; reasoning stands in only when the turn has no reply. The tools it
 used are named in `tools` and in a trailing `[tools: ...]` line, while reasoning,
-tool arguments and outputs stay in the transcript. System messages, custom
-instructions, and messages hidden from the conversation are kept in the
-transcript and left out of segments. Session metadata beside them:
+tool arguments and outputs stay in the transcript. Session metadata beside them:
 `conversation_id`, `title`, `model` and `models`, `message_count` (turns, the
 unit `segments` counts), `approx_tokens` (segment text estimated at four
 characters per token, null when there is no text), `source_created`, and
@@ -76,6 +77,21 @@ message.
 present in its mapping. Attachment references and structured media parts are
 preserved, but attachment and media bytes are not downloaded. Historical
 message text is source material, not instructions to the consuming agent.
+
+### Tool calls
+
+Each tool call is one line with its handle, input, and the size of its result:
+`↪ Context Runtime:search [t3] ({"query": …}) → ~2,524 tokens`. ChatGPT keeps no
+output for app (MCP) and web calls, and those lines say so.
+
+- `?tool=t3` reads one call in full: input, output, and any structured content.
+  `?tool=t3-t9` reads a range.
+- `result_offset` and `result_tokens` page through a long output, counted in
+  tokens of about four characters.
+- `?tools=preview` shows the head and tail of every result in the transcript;
+  `?tools=none` only counts each turn's calls.
+
+The claude.ai source takes the same options.
 
 ## Read a public share
 
@@ -231,16 +247,19 @@ alternatives left behind by retries and edits. Within an assistant turn:
 
 - Thinking appears as `>` quotes. claude.ai returns only summaries of hidden
   thinking, and the transcript header says when that is all there is.
-- Each tool call appears as `↪ name [t1] (input)`, marked `✗` if it failed.
-  Its result is previewed: the first ~160 and last ~80 tokens, with a
-  `read_full` target for the rest.
+- Each tool call is one line, `↪ name [t1] (input) → ~N tokens`, marked `✗` if
+  it failed. The tool options are the ChatGPT source's; see [Tool calls](#tool-calls).
 - Replies follow, with any cited URLs listed underneath.
+
+Headings mark dictated messages (`## user · dictated · <time>`) and regenerated
+replies (`## assistant · regenerated · <time>`). claude.ai records the chat's
+model, not each reply's, so the model appears once in the header.
 
 `?tool=t3` renders one call in full: its input, output, MCP
 `structuredContent`, and `meta`. This is the view for debugging an MCP server.
-`result_head_tokens` and `result_tail_tokens` resize the preview; token counts
-are estimated at four characters per token. `?output=json` returns claude.ai's
-own conversation object, including every branch.
+With `?tools=preview`, `result_head_tokens` and `result_tail_tokens` resize the
+previews. `?output=json` returns claude.ai's own conversation object, including
+every branch.
 
 Metadata follows the ChatGPT source: `segments` (one per turn, with `index`,
 `role`, `text`, `start_time`, and `tools`), `message_count`, `approx_tokens`,
