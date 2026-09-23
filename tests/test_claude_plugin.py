@@ -121,3 +121,9 @@ def test_search_renders_snippets_and_continuation(fake_client, monkeypatch):
     assert f"- Runtime check — claude:chat/{CONVERSATION}\n  …the runtime registry…" in item["content"]
     assert "Continue: claude:search?limit=1&offset=1&query=runtime" in item["content"]
     assert fake_client.calls == [("search", "runtime", 1, None)]
+
+
+def test_continuation_offset_is_not_reset_by_list_context(fake_client):
+    fake_client.pages = [{"data": [{"uuid": CONVERSATION, "name": "Runtime check"}], "has_more": False}]
+    plugin.list_targets("claude:chats?limit=100&offset=100", {"list_limit": 100, "list_offset": 0})
+    assert fake_client.calls == [("conversations", 100, 100)]

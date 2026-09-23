@@ -94,11 +94,11 @@ def list_targets(target: str, context: dict) -> dict:
     if parsed.kind == "chat":
         return {"targets": [], "summary": {"kind": "chat", "hint": "Resolve this target to read its active branch."}, "pagination": None}
     _require_live(context)
-    overrides = {
+    paging = {
         key: context[name] for name, key in (("list_limit", "limit"), ("list_offset", "offset"))
-        if context.get(name) is not None
+        if context.get(name) is not None and not (key == "offset" and "offset" in parsed.options)
     }
-    parsed = Target(parsed.kind, None, normalize_options({**parsed.options, **overrides}, parsed.kind))
+    parsed = Target(parsed.kind, None, normalize_options({**parsed.options, **paging}, parsed.kind))
     with ClaudeClient() as client:
         page = _read(client, parsed)
     return {

@@ -237,3 +237,9 @@ def test_public_share_offline_operations_do_not_construct_transport(monkeypatch,
     with pytest.raises(ValueError, match="offline"):
         plugin.resolve(target, {"cache_only": True})
     assert fake_client.instances == 0
+
+
+def test_continuation_offset_is_not_reset_by_list_context(fake_client):
+    fake_client.responses = [{"items": [{"id": ID, "title": "Second page"}], "total": 300}]
+    plugin.list_targets("chatgpt:threads?limit=1&offset=100", {"list_limit": 1, "list_offset": 0})
+    assert fake_client.calls[0][1]["offset"] == 100
