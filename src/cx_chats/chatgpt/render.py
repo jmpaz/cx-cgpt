@@ -185,7 +185,8 @@ def _call(message: dict[str, Any], handle: str) -> Call:
         elif pieces:
             name = pieces[0]
         value = parsed.get("args")
-    return Call(handle, name, integration, input=value or None, called=iso_timestamp(message.get("create_time")))
+    return Call(handle, name, integration, input=None if value in ("", None) else value,
+                called=iso_timestamp(message.get("create_time")))
 
 
 def _answers(name: str | None, recipient: str) -> bool:

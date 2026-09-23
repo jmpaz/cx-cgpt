@@ -183,6 +183,13 @@ def test_an_app_call_whose_output_chatgpt_dropped_says_so():
     assert "## Output\n\nNo output kept by ChatGPT." in full
 
 
+def test_empty_arguments_are_shown_as_given():
+    payload = tool_exchange()
+    payload["mapping"]["call"]["message"]["content"]["text"] = '{"path": "/Example App/list", "args": {}}'
+    text, *_ = render_conversation(payload)
+    assert "↪ Example App:list [t1] (`{}`) → ~3 tokens" in text
+
+
 def test_extra_result_fields_are_kept_for_the_full_view():
     payload = tool_exchange()
     payload["mapping"]["empty"]["message"]["content"]["result"] = {"status": "expired"}
