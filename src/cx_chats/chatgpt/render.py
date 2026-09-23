@@ -136,7 +136,7 @@ def _referenced(text: str, detail: dict[str, Any]) -> str:
         start, end = reference.get("start_idx"), reference.get("end_idx")
         if isinstance(start, int) and isinstance(end, int) and text[start:end] == matched:
             text = text[:start] + replacement + text[end:]
-        else:
+        elif "\ue200" in matched:
             text = text.replace(matched, replacement, 1)
     return _MARKER.sub("", text)
 

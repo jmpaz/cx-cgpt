@@ -444,6 +444,17 @@ def test_citation_markers_become_their_links():
     assert "\ue200" not in prose
 
 
+def test_a_footnote_reference_past_the_end_leaves_the_text_alone():
+    payload = conversation()
+    answer = payload["mapping"]["answer"]["message"]
+    answer["content"]["parts"] = ["I'd keep it."]
+    answer["metadata"]["content_references"] = [
+        {"matched_text": " ", "start_idx": 12, "end_idx": 13, "type": "sources_footnote", "alt": ""},
+    ]
+    text, *_ = render_conversation(payload)
+    assert "I'd keep it." in text
+
+
 def test_writing_blocks_become_titled_documents():
     payload = conversation()
     payload["mapping"]["answer"]["message"]["content"]["parts"] = [
