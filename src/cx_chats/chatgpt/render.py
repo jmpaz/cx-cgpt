@@ -197,6 +197,7 @@ def render_conversation(
             "",
         ]
     )
+    status_at = len(lines)
     message_metadata, prose_parts, authors, models = [], [], [], []
     segments = Segments()
     for node in nodes:
@@ -269,21 +270,12 @@ def render_conversation(
             models.append(model)
         _record_turn(segments, message, detail, provenance, prose, name)
     if issues:
-        lines.extend(
-            [
-                "Capture status: INCOMPLETE",
-                "",
-                *[f"- {label(issue)}" for issue in issues],
-                "",
-            ]
-        )
-    else:
-        lines.extend(
-            [
-                "Capture status: complete active branch; structured media references do not include media bytes.",
-                "",
-            ]
-        )
+        lines[status_at:status_at] = [
+            "Capture status: INCOMPLETE",
+            "",
+            *[f"- {label(issue)}" for issue in issues],
+            "",
+        ]
     turns = segments.finish()
     metadata = {
         "conversation_id": identifier,

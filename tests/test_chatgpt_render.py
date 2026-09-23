@@ -188,9 +188,15 @@ def test_missing_ancestor_retains_reachable_messages_and_marks_incomplete():
     del payload["mapping"]["question"]
     text, metadata, _, _ = render_conversation(payload)
     assert "Answer" in text
-    assert "INCOMPLETE" in text
+    assert text.index("Capture status: INCOMPLETE") < text.index("## assistant")
     assert not metadata["complete"]
     assert "Missing ancestor" in metadata["incomplete_reasons"][0]
+
+
+def test_a_complete_capture_ends_with_the_last_message():
+    text, *_ = render_conversation(conversation())
+    assert text.rstrip().endswith("Answer")
+    assert "Capture status" not in text
 
 
 def test_cycle_terminates_without_duplicating_messages():
