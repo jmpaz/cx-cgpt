@@ -64,20 +64,20 @@ class Segments:
         self.entries: list[dict[str, Any]] = []
         self._turn: dict[str, Any] | None = None
 
-    def user(self, text: str, timestamp: str | None) -> None:
+    def user(self, text: str, timestamp: str | None, *, dictated: bool = False) -> None:
         self._close()
         if text.strip():
-            self._append("user", text.strip(), timestamp, [])
+            self._append("user", text.strip(), timestamp, [], {"dictated": True} if dictated else {})
 
     def assistant(
-        self, text: str, timestamp: str | None, *, reasoning: bool = False
+        self, text: str, timestamp: str | None, *, reasoning: bool = False, model: str | None = None
     ) -> None:
-        turn = self._open(timestamp)
+        turn = self._open(timestamp, model)
         if text.strip():
             turn["reasoning" if reasoning else "text"].append(text.strip())
 
-    def tool(self, name: Any, timestamp: str | None) -> None:
-        turn = self._open(timestamp)
+    def tool(self, name: Any, timestamp: str | None, *, model: str | None = None) -> None:
+        turn = self._open(timestamp, model)
         if isinstance(name, str) and name and name not in turn["tools"]:
             turn["tools"].append(name)
 
@@ -85,14 +85,17 @@ class Segments:
         self._close()
         return self.entries
 
-    def _open(self, timestamp: str | None) -> dict[str, Any]:
+    def _open(self, timestamp: str | None, model: str | None = None) -> dict[str, Any]:
         if self._turn is None:
             self._turn = {
                 "start_time": timestamp,
+                "model": None,
                 "reasoning": [],
                 "text": [],
                 "tools": [],
             }
+        if model:
+            self._turn["model"] = model
         return self._turn
 
     def _close(self) -> None:
@@ -105,10 +108,11 @@ class Segments:
             blocks.append("[tools: " + ", ".join(turn["tools"]) + "]")
         text = "\n\n".join(block for block in blocks if block)
         if text:
-            self._append("assistant", text, turn["start_time"], turn["tools"])
+            model = {"model": turn["model"]} if turn["model"] else {}
+            self._append("assistant", text, turn["start_time"], turn["tools"], model)
 
     def _append(
-        self, role: str, text: str, timestamp: str | None, tools: list[str]
+        self, role: str, text: str, timestamp: str | None, tools: list[str], extra: dict[str, Any]
     ) -> None:
         self.entries.append(
             {
@@ -117,5 +121,6 @@ class Segments:
                 "text": text,
                 "start_time": timestamp,
                 "tools": list(tools),
+                **extra,
             }
         )

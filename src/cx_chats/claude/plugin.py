@@ -9,7 +9,8 @@ from ..transcript import iso_timestamp
 from .client import ClaudeClient
 from ..files import ChatFile, file_document
 from .files import outputs, uploads
-from .render import HEAD_TOKENS, TAIL_TOKENS, active_branch, render_conversation, render_tool
+from ..tools import HEAD_TOKENS, TAIL_TOKENS, TOOL_MODES
+from .render import active_branch, render_conversation, render_tools
 from .service import read_page, read_search
 from .targets import Target, is_claude_target, normalize_options, parse_target
 
@@ -19,8 +20,8 @@ PLUGIN_PRIORITY = 100
 PLUGIN_KIND = "source"
 
 _CLI_OPTIONS = (
-    "query", "project", "after", "before", "limit", "offset", "output", "tool", "file", "files",
-    "result_head_tokens", "result_tail_tokens",
+    "query", "project", "after", "before", "limit", "offset", "output", "tool", "tools", "file", "files",
+    "result_head_tokens", "result_tail_tokens", "result_offset", "result_tokens",
 )
 
 
@@ -154,7 +155,8 @@ def _read_chat(client: ClaudeClient, parsed: Target) -> tuple[list[dict], dict]:
         return [_file_document(identifier, _chat_file(client, payload, identifier, options["file"]))], payload
     files: list[ChatFile] = []
     if "tool" in options:
-        content, metadata = render_tool(payload, options["tool"])
+        content, metadata = render_tools(payload, options["tool"], offset=options.get("result_offset", 0),
+                                         tokens=options.get("result_tokens"))
         prose, authors = "", []
         key = f"{identifier}/{options['tool']}"
     else:
@@ -162,6 +164,7 @@ def _read_chat(client: ClaudeClient, parsed: Target) -> tuple[list[dict], dict]:
         found, problem = _outputs(client, identifier) if attach else ([], None)
         content, metadata, prose, authors = render_conversation(
             payload, attach_files=attach, outputs=found, outputs_problem=problem,
+            tools=options.get("tools", "lines"),
             head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
             tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS),
         )
@@ -220,7 +223,9 @@ def register_cli_options(command_name: str, command: Any) -> None:
         option_type = (
             click.Choice(["transcript", "json"]) if name == "output"
             else click.Choice(["attach", "inline"]) if name == "files"
-            else int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens"} else str
+            else click.Choice(list(TOOL_MODES)) if name == "tools"
+            else int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens",
+                                 "result_offset", "result_tokens"} else str
         )
         command.params.append(click.Option([flag, "claude_" + name], type=option_type, default=None,
                                            help=f"claude.ai {name.replace('_', ' ')}; see cx-chats README."))

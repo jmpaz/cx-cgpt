@@ -1,4 +1,8 @@
-from cx_chats.chatgpt.render import render_conversation
+import json
+
+import pytest
+
+from cx_chats.chatgpt.render import render_conversation, render_tools
 
 
 def message(identifier, role, content, **extra):
@@ -88,7 +92,7 @@ def test_structured_media_and_attachments_preserved_without_claiming_prose():
     assert metadata["media_fetched"] is False
 
 
-def test_tool_message_name_recipient_and_code_content():
+def test_a_tool_result_without_its_call_still_reads_as_a_tool_call():
     payload = conversation()
     msg = payload["mapping"]["answer"]["message"]
     msg.update(
@@ -98,11 +102,13 @@ def test_tool_message_name_recipient_and_code_content():
         content={"content_type": "code", "text": "print(1)", "language": "python"},
     )
     text, metadata, prose, authors = render_conversation(payload)
-    assert "tool (python)" in text
-    assert "print(1)" in prose
+    assert "↪ python [t1] → ~2 tokens" in text
+    assert "print(1)" not in prose
     assert metadata["messages"][1]["recipient"] == "all"
     assert metadata["messages"][1]["channel"] == "analysis"
-    assert authors[-1] == "tool (python)"
+    assert authors == ["user"]
+    full, _ = render_tools(payload, "t1", target="chatgpt:thread/conversation")
+    assert "## Output\n\nprint(1)" in full
 
 
 def tool_exchange():
@@ -150,37 +156,39 @@ def tool_exchange():
     return payload
 
 
-def test_empty_tool_output_names_the_invoked_app_and_drops_default_fields():
-    text, metadata, prose, _ = render_conversation(tool_exchange())
-    assert (
-        "Tool output not retained in conversation history by the service (Example App)."
-        in text
-    )
-    assert '{"path": "/Example App/list"}' in text
-    assert '{"items": 2}' in text
-    assert text.count("Additional content fields") == 2
+def test_an_app_call_reads_as_one_line_and_its_kept_output_in_full():
+    text, metadata, prose, _ = render_conversation(tool_exchange(), target="chatgpt:thread/conversation")
+    assert "↪ Example App:list [t1] → ~3 tokens" in text
     assert "asdk_app_0001" not in text
-    assert "not retained" not in prose
-    assert metadata["segments"][1]["tools"] == ["api_tool.call_tool"]
-    assert metadata["segments"][1]["text"] == "Answer\n\n[tools: api_tool.call_tool]"
+    assert '{"items": 2}' not in text
+    assert "no output kept" not in prose
+    assert metadata["segments"][1]["tools"] == ["Example App:list"]
+    assert metadata["segments"][1]["text"] == "Answer\n\n[tools: Example App:list]"
+    assert metadata["tool_calls"] == [{"handle": "t1", "name": "Example App:list", "integration": "Example App",
+                                       "output_kept": True, "start_time": None}]
+    full, _ = render_tools(tool_exchange(), "t1", target="chatgpt:thread/conversation")
+    assert full.startswith("# Example · t1 Example App:list")
+    assert '## Output\n\n{"items": 2}' in full
 
 
-def test_empty_tool_output_without_invoked_metadata_names_the_tool():
+def test_an_app_call_whose_output_chatgpt_dropped_says_so():
     payload = tool_exchange()
-    payload["mapping"]["empty"]["message"]["metadata"] = {}
-    text, _, _, _ = render_conversation(payload)
-    assert (
-        "Tool output not retained in conversation history by the service"
-        " (api_tool.call_tool)." in text
-    )
+    del payload["mapping"]["output"]
+    payload["mapping"]["answer"]["parent"] = "empty"
+    text, metadata, _, _ = render_conversation(payload)
+    assert "↪ Example App:list [t1] → no output kept by ChatGPT" in text
+    assert "ChatGPT keeps no output for app (MCP) and web calls" in text
+    assert metadata["tool_calls"][0]["output_kept"] is False
+    full, _ = render_tools(payload, "t1", target="chatgpt:thread/conversation")
+    assert "## Output\n\nNo output kept by ChatGPT." in full
 
 
-def test_empty_tool_output_keeps_content_fields_that_carry_information():
+def test_extra_result_fields_are_kept_for_the_full_view():
     payload = tool_exchange()
     payload["mapping"]["empty"]["message"]["content"]["result"] = {"status": "expired"}
-    text, _, _, _ = render_conversation(payload)
-    assert '"status": "expired"' in text
-    assert "response_format_name" not in text.split("## tool")[1]
+    full, _ = render_tools(payload, "t1", target="chatgpt:thread/conversation")
+    assert '## Structured content\n\n```json\n{\n  "result": {\n    "status": "expired"' in full
+    assert "response_format_name" not in full
 
 
 def test_missing_ancestor_retains_reachable_messages_and_marks_incomplete():
@@ -264,6 +272,7 @@ def test_segments_mirror_turns_with_times_and_counts():
             "text": "Answer",
             "start_time": "2023-11-14T22:14:20Z",
             "tools": [],
+            "model": "example-model",
         },
     ]
     assert metadata["message_count"] == 2
@@ -378,13 +387,113 @@ def test_system_and_hidden_messages_stay_out_of_segments():
     assert "Preferred tone" not in str(metadata["segments"])
 
 
-def test_hidden_message_metadata_is_still_rendered_and_counted_as_provenance():
+def test_hidden_messages_stay_out_of_the_transcript_but_keep_their_provenance():
     payload = conversation()
     payload["mapping"]["answer"]["message"]["metadata"][
         "is_visually_hidden_from_conversation"
     ] = True
     text, metadata, _, _ = render_conversation(payload)
-    assert "Answer" in text
+    assert "Answer" not in text
     assert len(metadata["messages"]) == 2
     assert [segment["role"] for segment in metadata["segments"]] == ["user"]
     assert metadata["message_count"] == 1
+
+
+def test_turn_headings_carry_each_replys_model_and_dictation():
+    payload = conversation()
+    question = payload["mapping"]["question"]["message"]
+    question["create_time"] = 1700000000
+    question["metadata"] = {"dictation": True}
+    payload["mapping"]["answer"]["message"]["create_time"] = 1700000060
+    payload["mapping"]["follow"] = {"id": "follow", "parent": "answer",
+                                    "message": message("f", "user", "Again", create_time=1700000120)}
+    payload["mapping"]["again"] = {"id": "again", "parent": "follow",
+                                   "message": message("g", "assistant", "Second", create_time=1700000180,
+                                                      metadata={"model_slug": "other-model"})}
+    payload["current_node"] = "again"
+    text, metadata, _, _ = render_conversation(payload)
+    assert "## user · dictated · 2023-11-14T22:13:20Z\n\nQuestion" in text
+    assert "## assistant · example-model · 2023-11-14T22:14:20Z\n\nAnswer" in text
+    assert "## user · 2023-11-14T22:15:20Z\n\nAgain" in text
+    assert "## assistant · other-model · 2023-11-14T22:16:20Z\n\nSecond" in text
+    assert "Models: example-model, other-model" in text
+    assert metadata["segments"][0]["dictated"] is True
+    assert "dictated" not in metadata["segments"][2]
+    assert [segment.get("model") for segment in metadata["segments"][1::2]] == ["example-model", "other-model"]
+
+
+def test_citation_markers_become_their_links():
+    payload = conversation()
+    answer = payload["mapping"]["answer"]["message"]
+    marker = "\ue200cite\ue202turn1search2\ue201"
+    answer["content"]["parts"] = [f"Prices fell. {marker} Stray \ue200entity\ue202x\ue201end."]
+    answer["metadata"]["content_references"] = [{
+        "matched_text": marker, "start_idx": 13, "end_idx": 13 + len(marker),
+        "alt": "([Example](https://example.com/a))",
+    }]
+    text, _, prose, _ = render_conversation(payload)
+    assert "Prices fell. ([Example](https://example.com/a)) Stray end." in text
+    assert "\ue200" not in text
+    assert "\ue200" not in prose
+
+
+def test_writing_blocks_become_titled_documents():
+    payload = conversation()
+    payload["mapping"]["answer"]["message"]["content"]["parts"] = [
+        'Intro\n\n:::writing{variant="document" id="1" title="A phrase instrument"}\n# Brief\n\nBuild it.\n:::\n\nAfter'
+    ]
+    text, _, _, _ = render_conversation(payload)
+    assert "Writing block: A phrase instrument\n\n```markdown\n# Brief\n\nBuild it.\n```" in text
+    assert ":::" not in text
+    assert text.index("Intro") < text.index("Writing block") < text.index("After")
+
+
+def test_sandbox_links_point_at_attached_outputs():
+    payload = conversation()
+    payload["mapping"]["answer"]["message"]["content"]["parts"] = ["[Notes](sandbox:/mnt/data/notes.md)"]
+    inline, *_ = render_conversation(payload)
+    attached, *_ = render_conversation(payload, attach_files=True)
+    assert "[Notes](sandbox:/mnt/data/notes.md)" in inline
+    assert "[Notes](outputs/notes.md)" in attached
+
+
+def calls_turn():
+    payload = conversation()
+    mapping = payload["mapping"]
+    parent = "question"
+    for index, query in enumerate(["alpha", "beta", "gamma"], 1):
+        mapping[f"call{index}"] = {"id": f"call{index}", "parent": parent, "message": {
+            "id": f"c{index}", "author": {"role": "assistant"}, "recipient": "api_tool.call_tool",
+            "content": {"content_type": "code", "text": json.dumps({"path": "/App/link_1/search", "args": {"query": query}})},
+        }}
+        mapping[f"result{index}"] = {"id": f"result{index}", "parent": f"call{index}",
+                                     "message": tool_message(f"r{index}", ("found " + query + " ") * 40)}
+        parent = f"result{index}"
+    mapping["answer"]["parent"] = parent
+    return payload
+
+
+def test_tool_modes_trade_detail_for_length():
+    lines, *_ = render_conversation(calls_turn(), target="chatgpt:thread/conversation")
+    assert '↪ App:search [t1] (`{"query": "alpha"}`) → ~' in lines
+    assert "found alpha" not in lines
+    assert "read one in full with chatgpt:thread/conversation?tool=t1" in lines
+    preview, *_ = render_conversation(calls_turn(), tools="preview", target="chatgpt:thread/conversation")
+    assert "found alpha" in preview
+    counted, *_ = render_conversation(calls_turn(), tools="none", target="chatgpt:thread/conversation")
+    assert "↪ 3 tool calls [t1–t3]: App:search ×3" in counted
+    assert "[t2]" not in counted
+    assert counted.index("tool calls [t1–t3]") < counted.index("Answer")
+
+
+def test_a_range_of_calls_reads_in_full_and_long_output_pages():
+    full, metadata = render_tools(calls_turn(), "t2-t3", target="chatgpt:thread/conversation")
+    assert full.startswith("# Example · t2–t3")
+    assert "## t2 · App:search" in full and "## t3 · App:search" in full
+    assert "### Output\n\n" + "found beta " * 40 in full
+    assert metadata["names"] == ["App:search", "App:search"]
+    page, _ = render_tools(calls_turn(), "t1", target="chatgpt:thread/conversation", offset=10, tokens=20)
+    assert "Showing tokens ~10–30 of ~120." in page
+    assert "Continue: chatgpt:thread/conversation?tool=t1&result_offset=30&result_tokens=20" in page
+    with pytest.raises(ValueError, match="No tool call t4-t5"):
+        render_tools(calls_turn(), "t4-t5", target="chatgpt:thread/conversation")

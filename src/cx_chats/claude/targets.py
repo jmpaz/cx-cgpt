@@ -7,17 +7,20 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import UUID
 
+from ..tools import TOOL_MODES, valid_handles
+
 _OPTIONS = {
-    "chat": {"output", "tool", "file", "files", "result_head_tokens", "result_tail_tokens"},
+    "chat": {"output", "tool", "tools", "file", "files", "result_head_tokens", "result_tail_tokens",
+             "result_offset", "result_tokens"},
     "chats": {"after", "before", "limit", "offset", "output"},
     "search": {"query", "project", "after", "before", "limit", "offset", "output"},
 }
 SEARCH_LIMIT = 200
-_INTEGERS = {"limit": 1, "offset": 0, "result_head_tokens": 0, "result_tail_tokens": 0}
+_INTEGERS = {"limit": 1, "offset": 0, "result_head_tokens": 0, "result_tail_tokens": 0,
+             "result_offset": 0, "result_tokens": 1}
 _DATE = re.compile(
     r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:\d{2}))?\Z"
 )
-_HANDLE = re.compile(r"t[1-9]\d*\Z")
 
 
 @dataclass(frozen=True)
@@ -90,8 +93,10 @@ def normalize_options(raw: dict[str, Any] | None, kind: str | None = None) -> di
             raise ValueError(f"{key} must be an ISO date or timezone-aware timestamp") from exc
     if "output" in options and options["output"] not in {"transcript", "json"}:
         raise ValueError("output must be transcript or json")
-    if "tool" in options and not (isinstance(options["tool"], str) and _HANDLE.fullmatch(options["tool"])):
-        raise ValueError("tool must be a tool handle such as t3")
+    if "tool" in options and not valid_handles(options["tool"]):
+        raise ValueError("tool must be a handle such as t3 or a range such as t3-t9")
+    if "tools" in options and options["tools"] not in TOOL_MODES:
+        raise ValueError("tools must be lines, preview, or none")
     if "files" in options and options["files"] not in {"attach", "inline"}:
         raise ValueError("files must be attach or inline")
     if "file" in options and not (isinstance(options["file"], str) and options["file"].strip()

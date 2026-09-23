@@ -1,7 +1,7 @@
 import pytest
 from claude_payloads import CONVERSATION, ROOT, block, conversation, message, tool_turn
 
-from cx_chats.claude.render import render_conversation, render_tool
+from cx_chats.claude.render import render_conversation, render_tools
 
 
 def test_tool_calls_render_in_order_with_handles_and_errors():
@@ -9,9 +9,10 @@ def test_tool_calls_render_in_order_with_handles_and_errors():
     assert text.index("> Checking the runtime.") < text.index("[t1]") < text.index("[t2]") < text.index(
         "The registry lists three sources."
     )
-    assert '↪ Runtime:list [t1] (`{"ref": "ctx://"}`)' in text
-    assert '↪ Runtime:open [t2] (`{"ref": "ctx://x", "detail": "titles"}`) ✗' in text
-    assert "    registry listing" in text
+    assert '↪ Runtime:list [t1] (`{"ref": "ctx://"}`) → ~4 tokens' in text
+    assert '↪ Runtime:open [t2] (`{"ref": "ctx://x", "detail": "titles"}`) → ~9 tokens ✗' in text
+    assert "registry listing" not in text
+    assert f"read one in full with claude:chat/{CONVERSATION}?tool=t1" in text
     assert "Reasoning: the service returned summaries only" in text
     assert metadata["reasoning"] == "summaries"
     assert [(call["handle"], call["name"], call["is_error"]) for call in metadata["tool_calls"]] == [
@@ -42,7 +43,7 @@ def test_long_results_and_inputs_are_previewed_with_full_read_target():
         block("tool_result", "2026-09-22T19:59:24Z", tool_use_id="toolu_1", name="create_file", is_error=False,
               content=[{"type": "text", "text": "HEAD" + "y" * 4000 + "TAIL"}]),
     ])
-    text, *_ = render_conversation(conversation(question, answer), head_tokens=10, tail_tokens=5)
+    text, *_ = render_conversation(conversation(question, answer), tools="preview", head_tokens=10, tail_tokens=5)
     assert "↪ create_file [t1] · Files\n    input: ~505 tokens; showing head ~10 + tail ~5; omitted ~490" in text
     assert f"    read_full: claude:chat/{CONVERSATION}?tool=t1" in text
     assert "    result: ~1,002 tokens; showing head ~10 + tail ~5; omitted ~987" in text
@@ -92,7 +93,7 @@ def test_user_attachments_files_and_unknown_blocks_stay_visible():
 
 
 def test_tool_view_carries_full_input_output_structured_content_and_meta():
-    text, metadata = render_tool(conversation(*tool_turn()), "t1")
+    text, metadata = render_tools(conversation(*tool_turn()), "t1")
     assert text.startswith("# Runtime check · t1 Runtime:list")
     assert "MCP server: https://runtime.example/mcp" in text
     assert '## Input\n\n```json\n{\n  "ref": "ctx://"\n}\n```' in text
@@ -105,7 +106,7 @@ def test_tool_view_carries_full_input_output_structured_content_and_meta():
 
 def test_tool_view_rejects_unknown_handle():
     with pytest.raises(ValueError, match="No tool call t9 .* it has 2"):
-        render_tool(conversation(*tool_turn()), "t9")
+        render_tools(conversation(*tool_turn()), "t9")
 
 
 def test_unpaired_result_gets_its_own_handle():
@@ -116,8 +117,8 @@ def test_unpaired_result_gets_its_own_handle():
         block("tool_use", "2026-09-22T19:59:25Z", id="toolu_9", name="pending", input={}),
     ])
     text, metadata, _, _ = render_conversation(conversation(question, answer))
-    assert "↪ late [t1]\n    result: ~4 tokens" in text
-    assert "↪ pending [t2] (`{}`)\n    result: none recorded" in text
+    assert "↪ late [t1] → ~4 tokens" in text
+    assert "↪ pending [t2] (`{}`) → no result recorded" in text
     assert [call["result_recorded"] for call in metadata["tool_calls"]] == [True, False]
 
 
@@ -128,3 +129,30 @@ def test_empty_conversation_says_so():
     assert "The conversation has no messages." in text
     assert metadata["complete"] is True
     assert metadata["segments"] == []
+
+
+def test_headings_mark_dictated_messages_and_regenerated_replies():
+    question, answer = tool_turn()
+    question["input_mode"] = "speech_input"
+    answer["input_mode"] = "retry"
+    text, metadata, _, _ = render_conversation(conversation(question, answer))
+    assert "## user · dictated · 2026-09-22T19:59:21Z" in text
+    assert "## assistant · regenerated · 2026-09-22T19:59:22Z" in text
+    assert "Model: claude-example (claude.ai records the chat's model, not each reply's)" in text
+    assert metadata["segments"][0]["dictated"] is True
+
+
+def test_tool_calls_can_be_counted_instead_of_listed():
+    text, *_ = render_conversation(conversation(*tool_turn()), tools="none")
+    assert "↪ 2 tool calls [t1–t2]: Runtime:list, Runtime:open" in text
+    assert "[t1] (" not in text
+    assert text.index("> Checking the runtime.") < text.index("↪ 2 tool calls") < text.index("The registry lists")
+
+
+def test_a_range_of_calls_reads_in_full():
+    text, metadata = render_tools(conversation(*tool_turn()), "t1-t2")
+    assert text.startswith("# Runtime check · t1–t2")
+    assert "## t1 · Runtime:list" in text and "## t2 · Runtime:open" in text
+    assert "### Output\n\nopen takes detail summary or full" in text
+    assert metadata["names"] == ["Runtime:list", "Runtime:open"]
+    assert metadata["is_error"] is True

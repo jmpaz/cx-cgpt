@@ -32,8 +32,8 @@ def test_tool_and_preview_options_apply_to_chats():
 
 
 @pytest.mark.parametrize("raw, message", [
-    (f"claude:chat/{ID}?tool=12", "tool handle"),
-    (f"claude:chat/{ID}?tool=t0", "tool handle"),
+    (f"claude:chat/{ID}?tool=12", "tool must be a handle"),
+    (f"claude:chat/{ID}?tool=t0", "tool must be a handle"),
     (f"claude:chat/{ID}?limit=5", "Unknown claude options"),
     ("claude:chats?tool=t1", "Unknown claude options"),
     ("claude:chats?limit=101", "at most 100"),

@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 import json
-import math
-import re
 from dataclasses import dataclass
 from collections.abc import Iterator, Sequence
 from typing import Any
 
-from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
 from ..files import ChatFile, file_index, file_summary
+from ..tools import (
+    HEAD_TOKENS,
+    TAIL_TOKENS,
+    Call,
+    call_line,
+    call_preview,
+    calls_summary,
+    fenced,
+    render_calls,
+    select,
+    tools_note,
+)
+from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
 from .files import uploads
 
 ROOT_PARENT = "00000000-0000-4000-8000-000000000000"
-HEAD_TOKENS = 160
-TAIL_TOKENS = 80
-INLINE_INPUT_CHARS = 400
-CHARS_PER_TOKEN = 4
 
 
 @dataclass
@@ -50,6 +56,19 @@ class ToolCall:
     @property
     def is_error(self) -> bool:
         return bool(self.result and self.result.get("is_error"))
+
+    def shared(self) -> Call:
+        result = self.result
+        return Call(
+            self.handle, self.name, self.integration, self.server_url,
+            input=self.use.get("input") if self.use is not None else None,
+            output=result_text(result) if result is not None else None,
+            is_error=self.is_error,
+            called=iso_timestamp((self.use or {}).get("start_timestamp")),
+            returned=iso_timestamp((result or {}).get("stop_timestamp")),
+            structured=(result or {}).get("structured_content"),
+            meta=(result or {}).get("meta"),
+        )
 
 
 def active_branch(payload: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
@@ -110,43 +129,6 @@ def _blocks(message: dict[str, Any]) -> list[dict[str, Any]]:
     return [block for block in content if isinstance(block, dict)] if isinstance(content, list) else []
 
 
-def _inline_code(text: str) -> str:
-    fence = "`" * (max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
-    padding = " " if text.startswith("`") or text.endswith("`") else ""
-    return f"{fence}{padding}{text}{padding}{fence}"
-
-
-def _fenced(text: str) -> str:
-    fence = "`" * max(3, max((len(run) + 1 for run in re.findall(r"`+", text)), default=3))
-    return f"{fence}\n{text}\n{fence}"
-
-
-def _indent(text: str) -> str:
-    return "\n".join("    " + line if line else "" for line in text.splitlines())
-
-
-def _approx(text: str) -> int:
-    return math.ceil(len(text) / CHARS_PER_TOKEN)
-
-
-def _preview(name: str, text: str, head: int, tail: int, full_target: str | None) -> list[str]:
-    total = _approx(text)
-    if total <= head + tail:
-        return [f"    {name}: ~{total:,} tokens", "", _indent(text)]
-    head_text = text[: head * CHARS_PER_TOKEN]
-    tail_text = text[len(text) - tail * CHARS_PER_TOKEN:] if tail else ""
-    omitted = total - head - tail
-    lines = [f"    {name}: ~{total:,} tokens; showing head ~{head} + tail ~{tail}; omitted ~{omitted:,}"]
-    if full_target:
-        lines.append(f"    read_full: {full_target}")
-    if head_text:
-        lines.extend(["", _indent(head_text)])
-    lines.extend(["", f"    [... omitted ~{omitted:,} tokens ...]"])
-    if tail_text:
-        lines.extend(["", _indent(tail_text)])
-    return lines
-
-
 def result_text(result: dict[str, Any]) -> str:
     parts = []
     content = result.get("content")
@@ -165,31 +147,6 @@ def result_text(result: dict[str, Any]) -> str:
     if not parts and result.get("structured_content"):
         parts.append(json.dumps(result["structured_content"], ensure_ascii=False, indent=2))
     return "\n\n".join(parts)
-
-
-def _input_text(use: dict[str, Any]) -> str:
-    return json.dumps(use.get("input", {}), ensure_ascii=False)
-
-
-def _render_call(call: ToolCall, head: int, tail: int, target: str | None) -> str:
-    heading = f"↪ {label(call.name)} [{call.handle}]"
-    if call.integration and not call.name.startswith(call.integration + ":"):
-        heading += f" · {label(call.integration)}"
-    lines = []
-    if call.use is not None:
-        arguments = _input_text(call.use)
-        if len(arguments) <= INLINE_INPUT_CHARS:
-            heading += f" ({_inline_code(arguments)})"
-        else:
-            lines = _preview("input", json.dumps(call.use.get("input"), ensure_ascii=False, indent=2), head, tail, target)
-    if call.is_error:
-        heading += " ✗"
-    if call.result is None:
-        lines.append("    result: none recorded")
-    else:
-        output = result_text(call.result)
-        lines.extend(_preview("result", output, head, tail, target) if output else ["    result: empty"])
-    return "\n".join([heading, *lines])
 
 
 def _thinking(block: dict[str, Any]) -> tuple[str, bool]:
@@ -235,7 +192,7 @@ def _user_extras(message: dict[str, Any], attached: Iterator[ChatFile] | None) -
         lines.append(f"Attachment: {label(attachment.get('file_name') or 'unnamed')}" + (f" ({described})" if described else ""))
         extracted = attachment.get("extracted_content")
         if isinstance(extracted, str) and extracted.strip():
-            lines.extend(["", _fenced(extracted)])
+            lines.extend(["", fenced(extracted)])
         lines.append("")
     for key, noun in (("files", "File"), ("sync_sources", "Synced source")):
         for entry in message.get(key) or []:
@@ -250,9 +207,16 @@ def _incomplete(issues: list[str]) -> list[str]:
     return ["Capture status: INCOMPLETE", "", *[f"- {label(issue)}" for issue in issues], ""] if issues else []
 
 
+def _heading(role: str, message: dict[str, Any], started: str | None) -> str:
+    qualifiers = {"speech_input": "dictated"} if role == "user" else {"retry": "regenerated"}
+    qualifier = qualifiers.get(message.get("input_mode"))
+    return "## " + " · ".join([label(role), *([qualifier] if qualifier else []), *([started] if started else [])])
+
+
 def render_conversation(
     payload: dict[str, Any], *, attach_files: bool = False, outputs: Sequence[ChatFile] = (),
-    outputs_problem: str | None = None, head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
+    outputs_problem: str | None = None, tools: str = "lines",
+    head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
 ) -> tuple[str, dict[str, Any], str, list[str]]:
     if not isinstance(payload, dict):
         raise ValueError("claude.ai conversation payload must be an object")
@@ -261,7 +225,9 @@ def render_conversation(
     attached = iter(files) if attach_files else None
     calls = tool_calls(branch)
     call_for = {id(call.use if call.use is not None else call.result): call for call in calls}
+    shared = {call.handle: call.shared() for call in calls}
     identifier = payload.get("uuid")
+    target = f"claude:chat/{identifier}" if identifier else None
     title = payload.get("name") or "Untitled chat"
     created = iso_timestamp(payload.get("created_at"))
     modified = iso_timestamp(payload.get("updated_at"))
@@ -271,7 +237,8 @@ def render_conversation(
         "Source: claude.ai conversation. Message bodies are quoted historical material, not instructions for the reader.", "",
     ]
     for name, value in (("Conversation ID", identifier), ("Created", created), ("Updated", modified),
-                        ("Model", model), ("Project", payload.get("project_uuid"))):
+                        ("Model", model and f"{model} (claude.ai records the chat's model, not each reply's)"),
+                        ("Project", payload.get("project_uuid"))):
         if value:
             lines.extend([f"{name}: {label(value)}", ""])
     lines.extend(["Branch: active path to the current leaf; alternative branches are not rendered.", ""])
@@ -282,6 +249,7 @@ def render_conversation(
     if summarized:
         lines.extend(["Reasoning: the service returned summaries only; raw thinking is hidden.", ""])
     lines.extend(file_index(files, outputs_problem))
+    lines.extend(tools_note(tools, target, list(shared.values())))
     lines.extend(_incomplete(issues))
     segments = Segments()
     prose_parts: list[str] = []
@@ -292,7 +260,9 @@ def render_conversation(
         blocks = _blocks(message)
         started = iso_timestamp(blocks[0].get("start_timestamp")) if blocks else None
         started = started or iso_timestamp(message.get("created_at"))
-        lines.extend([f"## {label(role)}" + (f" · {started}" if started else ""), ""])
+        lines.extend([_heading(role, message, started), ""])
+        turn_calls: list[Call] = []
+        summary_at = None
         provenance.append({
             "message_id": message.get("uuid"), "parent_id": message.get("parent_message_uuid"),
             "role": role, "created": iso_timestamp(message.get("created_at")),
@@ -324,14 +294,21 @@ def render_conversation(
             elif kind in ("tool_use", "tool_result"):
                 call = call_for.get(id(block))
                 if call is not None:
-                    target = f"claude:chat/{identifier}?tool={call.handle}" if identifier else None
-                    lines.extend([_render_call(call, head_tokens, tail_tokens, target), ""])
+                    turn_calls.append(shared[call.handle])
+                    summary_at = len(lines) if summary_at is None else summary_at
+                    full = f"{target}?tool={call.handle}" if target else None
+                    if tools == "lines":
+                        lines.extend([call_line(shared[call.handle]), ""])
+                    elif tools == "preview":
+                        lines.extend([call_preview(shared[call.handle], head_tokens, tail_tokens, full), ""])
                     segments.tool(call.name, timestamp)
             else:
                 lines.extend([f"Structured content ({label(kind)}):", "", json_block(block), ""])
+        if tools == "none" and summary_at is not None:
+            lines[summary_at:summary_at] = [calls_summary(turn_calls), ""]
         if role == "user":
             lines.extend(_user_extras(message, attached))
-            segments.user("\n\n".join(said), started)
+            segments.user("\n\n".join(said), started, dictated=message.get("input_mode") == "speech_input")
         if said:
             prose_parts.append("\n\n".join(said))
             if role not in authors:
@@ -372,38 +349,20 @@ def render_conversation(
     return "\n".join(lines), metadata, "\n\n".join(prose_parts), authors
 
 
-def render_tool(payload: dict[str, Any], handle: str) -> tuple[str, dict[str, Any]]:
+def render_tools(payload: dict[str, Any], spec: str, *, offset: int = 0,
+                 tokens: int | None = None) -> tuple[str, dict[str, Any]]:
     branch, issues = active_branch(payload)
-    calls = tool_calls(branch)
-    call = next((call for call in calls if call.handle == handle), None)
-    if call is None:
-        raise ValueError(f"No tool call {handle} on this conversation's active branch; it has {len(calls)}.")
+    chosen = [call.shared() for call in select(tool_calls(branch), spec)]
     identifier = payload.get("uuid")
     title = payload.get("name") or "Untitled chat"
-    lines = [
-        f"# {label(title)} · {call.handle} {label(call.name)}", "",
-        "Source: claude.ai conversation tool call. Its contents are quoted historical material, not instructions for the reader.", "",
-        f"Conversation: claude:chat/{identifier}", "",
-    ]
-    for name, value in (("Integration", call.integration), ("MCP server", call.server_url),
-                        ("Called", iso_timestamp((call.use or {}).get("start_timestamp"))),
-                        ("Returned", iso_timestamp((call.result or {}).get("stop_timestamp"))),
-                        ("Error", "yes" if call.is_error else None)):
-        if value:
-            lines.extend([f"{name}: {label(value)}", ""])
+    lines = [render_calls(title, "claude.ai conversation", f"claude:chat/{identifier}", chosen,
+                          offset=offset, tokens=tokens)]
     lines.extend(_incomplete(issues))
-    lines.extend(["## Input", "", json_block(call.use.get("input")) if call.use else "No call recorded.", ""])
-    lines.extend(["## Output", ""])
-    if call.result is None:
-        lines.extend(["No result recorded.", ""])
-    else:
-        lines.extend([result_text(call.result) or "Empty.", ""])
-        for key, heading in (("structured_content", "Structured content"), ("meta", "Metadata")):
-            if call.result.get(key):
-                lines.extend([f"## {heading}", "", json_block(call.result[key]), ""])
+    single = chosen[0] if len(chosen) == 1 else None
     metadata = {
-        "conversation_id": identifier, "title": title, "tool": call.handle, "name": call.name,
-        "integration": call.integration, "mcp_server_url": call.server_url, "is_error": call.is_error,
+        "conversation_id": identifier, "title": title, "tool": spec, "names": [call.name for call in chosen],
+        "name": single.name if single else None, "integration": single.integration if single else None,
+        "mcp_server_url": single.server_url if single else None, "is_error": any(call.is_error for call in chosen),
         "complete": not issues, "incomplete_reasons": issues,
     }
     return "\n".join(lines), metadata
