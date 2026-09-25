@@ -52,7 +52,11 @@ when the message was dictated or `voice` when it was spoken in voice mode, and
 `## assistant · <model> · <time>`, naming the model that wrote that reply.
 Within a turn come thought summaries as `>` quotes, commentary, tool calls, and
 the reply; what the assistant said aloud in voice mode reads `[spoken]`, so a
-conversation that moves between voice and text keeps each message's mode. Citations become their links and
+conversation that moves between voice and text keeps each message's mode. Voice
+mode sometimes saves a message long after it was said; a message stamped more
+than a minute after the person's next one takes the time of the message before
+it and its heading reads `time inferred`. Shorter overlaps are kept as recorded,
+since either side can speak over the other. Citations become their links and
 writing blocks become titled Markdown documents. System messages, custom
 instructions, and messages hidden from the conversation are left out;
 `metadata.messages` keeps their provenance. Broken or missing ancestry is

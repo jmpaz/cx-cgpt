@@ -608,10 +608,11 @@ def test_voice_mode_keeps_what_was_said_on_both_sides_and_marks_what_was_spoken(
     assert "## assistant · bidi · 2023-11-14T22:13:30Z" in text
     assert "\n[spoken] Yes, I can read it.\n" in text
     assert [(segment["role"], segment["text"]) for segment in metadata["segments"]] == [
-        ("user", "Can you read my chat with Sam"), ("assistant", "Yes, I can read it."),
+        ("user", "Can you read my chat with Sam"), ("assistant", "[spoken] Yes, I can read it."),
     ]
     assert metadata["segments"][0]["voice"] is True
     assert "Can you read my chat with Sam" in prose
+    assert "[spoken]" not in prose
 
 
 def test_a_turn_that_only_attaches_a_file_keeps_its_place():
@@ -625,3 +626,22 @@ def test_a_turn_that_only_attaches_a_file_keeps_its_place():
     assert metadata["segments"][0] == {**metadata["segments"][0], "role": "user", "text": "Attachment: notes.txt (text/plain, 120 bytes); not fetched"}
     assert "notes.txt" not in prose
     assert metadata["render_version"] >= 1
+
+
+def test_a_voice_message_saved_long_after_it_was_said_takes_the_time_before_it_and_says_so():
+    payload = conversation()
+    payload["mapping"]["question"]["message"]["create_time"] = 1700000000
+    answer = payload["mapping"]["answer"]["message"]
+    answer["create_time"] = 1700001800
+    payload["mapping"]["follow"] = {"id": "follow", "parent": "answer",
+                                    "message": message("f", "user", "Interrupting", create_time=1700000030)}
+    payload["mapping"]["again"] = {"id": "again", "parent": "follow",
+                                   "message": message("g", "assistant", "Over you", create_time=1700000025,
+                                                      metadata={"model_slug": "bidi"})}
+    payload["current_node"] = "again"
+    text, metadata, _, _ = render_conversation(payload)
+    assert "## assistant · example-model · time inferred · 2023-11-14T22:13:20Z" in text
+    assert "## assistant · bidi · 2023-11-14T22:13:45Z" in text
+    assert [segment["start_time"] for segment in metadata["segments"]] == [
+        "2023-11-14T22:13:20Z", "2023-11-14T22:13:20Z", "2023-11-14T22:13:50Z", "2023-11-14T22:13:45Z",
+    ]

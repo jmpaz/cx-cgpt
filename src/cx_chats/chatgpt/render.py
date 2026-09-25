@@ -284,6 +284,33 @@ def render_conversation_map(payload: dict[str, Any], target: str) -> tuple[str, 
     }
 
 
+_LATE_SAVE_SECONDS = 60
+
+
+# Voice mode sometimes saves a message long after it was said, stamping it with the time it was
+# saved. A message stamped more than a minute after the person's next message cannot have come
+# before it, so it takes the latest trustworthy time ahead of it and is marked as inferred. Shorter
+# overlaps are real: in voice either side can speak over the other.
+def _dated(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    next_user: list[float | None] = [None] * len(messages)
+    upcoming = None
+    for index in range(len(messages) - 1, -1, -1):
+        next_user[index] = upcoming
+        created = messages[index].get("create_time")
+        if _author(messages[index])[0] == "user" and isinstance(created, (int, float)):
+            upcoming = created
+    dated, floor = [], None
+    for message, ceiling in zip(messages, next_user):
+        created = message.get("create_time")
+        if isinstance(created, (int, float)) and ceiling is not None and created > ceiling + _LATE_SAVE_SECONDS and floor is not None:
+            dated.append({**message, "create_time": floor, "_time_inferred": True})
+            continue
+        if isinstance(created, (int, float)):
+            floor = created if floor is None else max(floor, created)
+        dated.append(message)
+    return dated
+
+
 def _turns(messages: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
     turns: list[tuple[str, list[dict[str, Any]]]] = []
     for message in messages:
@@ -309,6 +336,8 @@ def _heading(role: str, messages: list[dict[str, Any]]) -> str:
     models = [model for model in map(_model, messages) if model]
     if role == "assistant" and models:
         qualifiers.append(label(models[-1]))
+    if messages[0].get("_time_inferred"):
+        qualifiers.append("time inferred")
     started = iso_timestamp(messages[0].get("create_time"))
     return "## " + " · ".join([role, *qualifiers, *([started] if started else [])])
 
@@ -392,7 +421,10 @@ def render_conversation(
     payload = variant_payload(payload, variant)
     base, target = target, with_query(target, f"variant={variant}") if target and variant else target
     nodes, issues = _active_branch(payload)
-    key_of = {id(node.get("message")): key for key, node in _mapping(payload).items() if isinstance(node, dict)}
+    key_of = {
+        str(node["message"].get("id")): key for key, node in _mapping(payload).items()
+        if isinstance(node, dict) and isinstance(node.get("message"), dict)
+    }
     forks = tree.forks_on(tree.path(payload.get("current_node"))) if variants != "none" else {}
     title = payload.get("title") or "Untitled conversation"
     identifier = payload.get("conversation_id") or payload.get("id")
@@ -409,6 +441,7 @@ def render_conversation(
         provenance.append(_provenance(message, node))
         if not _hidden(message) or _author(message)[0] == "user":
             messages.append(message)
+    messages = _dated(messages)
     calls, by_message = tool_calls(messages)
     models = list(dict.fromkeys(
         model for message in messages if _author(message)[0] == "assistant" and (model := _model(message))
@@ -445,7 +478,7 @@ def render_conversation(
         ]
         lines.extend([_heading(role, shown_messages or turn), ""])
         for message in turn:
-            key = key_of.get(id(message))
+            key = key_of.get(str(message.get("id")))
             if key in forks:
                 lines.extend(note_lines(forks[key], key, variants))
         if role == "user":
@@ -486,7 +519,7 @@ def render_conversation(
                 segments.assistant(thought, timestamp, reasoning=True, model=model)
                 continue
             said = _referenced(_prose(content), _detail(message))
-            segments.assistant(said, timestamp, model=model)
+            segments.assistant(f"[spoken] {said.strip()}" if said.strip() and _voice(message) else said, timestamp, model=model)
             if said.strip():
                 prose_parts.append(said)
                 if "assistant" not in authors:
