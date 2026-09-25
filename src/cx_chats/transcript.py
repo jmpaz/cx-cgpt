@@ -57,6 +57,11 @@ def approx_tokens(segments: list[dict[str, Any]]) -> int | None:
     return math.ceil(characters / 4) if characters else None
 
 
+# Raised whenever a conversation renders differently, so a consumer that keeps renderings knows to
+# read its conversations again.
+RENDER_VERSION = 1
+
+
 class Segments:
     """Turn-level segments: one entry per conversational turn, in order."""
 
@@ -64,10 +69,11 @@ class Segments:
         self.entries: list[dict[str, Any]] = []
         self._turn: dict[str, Any] | None = None
 
-    def user(self, text: str, timestamp: str | None, *, dictated: bool = False) -> None:
+    def user(self, text: str, timestamp: str | None, *, dictated: bool = False, voice: bool = False) -> None:
         self._close()
         if text.strip():
-            self._append("user", text.strip(), timestamp, [], {"dictated": True} if dictated else {})
+            flags = {**({"dictated": True} if dictated else {}), **({"voice": True} if voice else {})}
+            self._append("user", text.strip(), timestamp, [], flags)
 
     def assistant(
         self, text: str, timestamp: str | None, *, reasoning: bool = False, model: str | None = None

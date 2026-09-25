@@ -19,7 +19,7 @@ from ..tools import (
     tools_note,
 )
 from ..query import with_query
-from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+from ..transcript import RENDER_VERSION, Segments, approx_tokens, iso_timestamp, json_block, label
 from ..variants import Message, Tree, header_lines, note_lines, render_map
 
 SANDBOX_LINK = "sandbox:/mnt/data/"
@@ -118,11 +118,22 @@ def _text(content: dict[str, Any]) -> str:
     return ""
 
 
+def _transcribed(part: Any) -> bool:
+    return isinstance(part, dict) and part.get("content_type") == "audio_transcription" and isinstance(part.get("text"), str)
+
+
+# Voice mode carries what was said, on either side, as transcription parts rather than text.
 def _prose(content: dict[str, Any]) -> str:
     parts = content.get("parts")
     if isinstance(parts, list):
-        return "\n\n".join(part for part in parts if isinstance(part, str) and part)
+        said = (part if isinstance(part, str) else part["text"] for part in parts if isinstance(part, str) or _transcribed(part))
+        return "\n\n".join(text for text in said if text)
     return content["text"] if isinstance(content.get("text"), str) else ""
+
+
+def _voice(message: dict[str, Any]) -> bool:
+    parts = _content(message).get("parts")
+    return isinstance(parts, list) and any(map(_transcribed, parts))
 
 
 def _referenced(text: str, detail: dict[str, Any]) -> str:
@@ -293,6 +304,8 @@ def _heading(role: str, messages: list[dict[str, Any]]) -> str:
     qualifiers = []
     if role == "user" and _detail(messages[0]).get("dictation") is True:
         qualifiers.append("dictated")
+    elif role == "user" and _voice(messages[0]):
+        qualifiers.append("voice")
     models = [model for model in map(_model, messages) if model]
     if role == "assistant" and models:
         qualifiers.append(label(models[-1]))
@@ -351,7 +364,9 @@ def _assistant_lines(message: dict[str, Any], call: Call | None, tools: str, hea
         return [_quoted(thought), ""] if thought else []
     if kind in ("text", "multimodal_text"):
         reply = _reply(message, attach_files)
-        return [reply.strip("\n"), ""] if reply.strip() else []
+        if not reply.strip():
+            return []
+        return [f"[spoken] {reply.strip()}" if _voice(message) else reply.strip("\n"), ""]
     if kind == "code":
         language = content.get("language") if isinstance(content.get("language"), str) else ""
         return [fenced(_text(content), "" if language == "unknown" else language), ""]
@@ -437,10 +452,10 @@ def render_conversation(
             said = "\n\n".join(_prose(_content(message)) for message in turn).strip()
             body = "\n\n".join(_text(_content(message)) for message in turn).strip()
             lines.extend([body, ""] if body else [])
-            for message in turn:
-                lines.extend(_attachments(message, attached))
-            segments.user(said, iso_timestamp(turn[0].get("create_time")),
-                          dictated=_detail(turn[0]).get("dictation") is True)
+            attachment_lines = [line for message in turn for line in _attachments(message, attached)]
+            lines.extend(attachment_lines)
+            segments.user(said or "\n".join(filter(None, attachment_lines)), iso_timestamp(turn[0].get("create_time")),
+                          dictated=_detail(turn[0]).get("dictation") is True, voice=_voice(turn[0]))
             if said:
                 prose_parts.append(said)
                 if "user" not in authors:
@@ -492,6 +507,7 @@ def render_conversation(
         "complete": not issues,
         "incomplete_reasons": issues,
         "message_count": len(turns),
+        "render_version": RENDER_VERSION,
         "messages": provenance,
         "model": models[-1] if models else None,
         "models": models,

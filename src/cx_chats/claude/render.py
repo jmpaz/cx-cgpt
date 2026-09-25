@@ -19,7 +19,7 @@ from ..tools import (
     tools_note,
 )
 from ..query import with_query
-from ..transcript import Segments, approx_tokens, iso_timestamp, json_block, label
+from ..transcript import RENDER_VERSION, Segments, approx_tokens, iso_timestamp, json_block, label
 from ..variants import Message, Tree, header_lines, note_lines, render_map
 from .files import uploads
 
@@ -350,8 +350,10 @@ def render_conversation(
         if tools == "none" and summary_at is not None:
             lines[summary_at:summary_at] = [calls_summary(turn_calls), ""]
         if role == "user":
-            lines.extend(_user_extras(message, attached))
-            segments.user("\n\n".join(said), started, dictated=message.get("input_mode") == "speech_input")
+            extras = _user_extras(message, attached)
+            lines.extend(extras)
+            carried = "\n".join(line for line in extras if line.startswith(("Attachment:", "File:", "Synced source:")))
+            segments.user("\n\n".join(said) or carried, started, dictated=message.get("input_mode") == "speech_input")
         if said:
             prose_parts.append("\n\n".join(said))
             if role not in authors:
@@ -371,6 +373,7 @@ def render_conversation(
         "complete": not issues,
         "incomplete_reasons": issues,
         "message_count": len(turns),
+        "render_version": RENDER_VERSION,
         "messages": provenance,
         "model": model,
         "models": [model] if model else [],

@@ -187,3 +187,14 @@ def test_the_chat_map_starts_each_edit_at_the_root():
     assert "●     v4 · 2 assistant · regenerated · 2026-09-22T19:59:30Z · Second name" in text
     assert "\n      v3 · 2 assistant · 2026-09-22T19:59:22Z · First name" in text
     assert "    v2 · 1 user · 2026-09-22T20:00:00Z · Name it again" in text
+
+
+def test_a_turn_that_only_attaches_a_file_keeps_its_place():
+    question = message("q", ROOT, "human", [], attachments=[{"file_name": "paste.txt", "file_type": "txt", "file_size": 4532}])
+    answer = message("a", "q", "assistant", [block("text", "2026-09-22T19:59:23Z", text="Read it.")])
+    _, metadata, prose, _ = render_conversation(conversation(question, answer))
+    assert [(segment["role"], segment["text"]) for segment in metadata["segments"]] == [
+        ("user", "Attachment: paste.txt (txt, 4,532 bytes)"), ("assistant", "Read it."),
+    ]
+    assert "paste.txt" not in prose
+    assert metadata["render_version"] >= 1

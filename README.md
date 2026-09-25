@@ -48,9 +48,11 @@ Custom GPT `/g/` or gizmo URLs are not supported; use a supported
 `chatgpt:UUID` is also accepted. A transcript follows `current_node` back
 through its ancestors: the selected branch, with other versions noted where
 they meet it (see [Variants](#variants)). Each turn has one heading: `## user · <time>`, marked `dictated`
-when the message was dictated, and `## assistant · <model> · <time>`, naming
-the model that wrote that reply. Within a turn come thought summaries as `>`
-quotes, commentary, tool calls, and the reply. Citations become their links and
+when the message was dictated or `voice` when it was spoken in voice mode, and
+`## assistant · <model> · <time>`, naming the model that wrote that reply.
+Within a turn come thought summaries as `>` quotes, commentary, tool calls, and
+the reply; what the assistant said aloud in voice mode reads `[spoken]`, so a
+conversation that moves between voice and text keeps each message's mode. Citations become their links and
 writing blocks become titled Markdown documents. System messages, custom
 instructions, and messages hidden from the conversation are left out;
 `metadata.messages` keeps their provenance. Broken or missing ancestry is
@@ -61,7 +63,10 @@ Resolved conversations and public shares carry `metadata.segments`: one entry
 per conversational turn on the selected branch, each with `index`, `role`
 (`user` or `assistant`), `text`, `start_time` (the message's create time in
 ISO-8601 UTC, null when the message has none), and `tools`; assistant turns add
-`model` and dictated user turns `dictated: true`. Downstream
+`model`, dictated user turns `dictated: true`, and spoken ones `voice: true`. A
+user turn with no words but an attachment carries its attachment lines as
+`text`, so it keeps its place. `render_version` rises whenever conversations
+render differently, so a store can read them again. Downstream
 indexers store turns as searchable segments. An assistant turn spans the
 reasoning, tool calls, tool results, and reply that belong to it, and its `text`
 is the reply; reasoning stands in only when the turn has no reply. The tools it

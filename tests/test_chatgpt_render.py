@@ -588,3 +588,40 @@ def test_the_map_outlines_every_version():
     assert "    v2 · 2 assistant · Alternative" in text
     assert "      3 user · And then?" in text
     assert metadata["variants"][0]["kind"] == "reply"
+
+
+def test_voice_mode_keeps_what_was_said_on_both_sides_and_marks_what_was_spoken():
+    payload = conversation()
+    question = payload["mapping"]["question"]["message"]
+    question["create_time"] = 1700000000
+    question["content"] = {"content_type": "multimodal_text", "parts": [
+        {"content_type": "audio_transcription", "text": "Can you read my chat with Sam", "direction": "in"},
+    ]}
+    answer = payload["mapping"]["answer"]["message"]
+    answer["create_time"] = 1700000010
+    answer["metadata"] = {"model_slug": "bidi"}
+    answer["content"] = {"content_type": "multimodal_text", "parts": [
+        {"content_type": "audio_transcription", "text": "Yes, I can read it.", "direction": "out"},
+    ]}
+    text, metadata, prose, _ = render_conversation(payload)
+    assert "## user · voice · 2023-11-14T22:13:20Z\n\nCan you read my chat with Sam" in text
+    assert "## assistant · bidi · 2023-11-14T22:13:30Z" in text
+    assert "\n[spoken] Yes, I can read it.\n" in text
+    assert [(segment["role"], segment["text"]) for segment in metadata["segments"]] == [
+        ("user", "Can you read my chat with Sam"), ("assistant", "Yes, I can read it."),
+    ]
+    assert metadata["segments"][0]["voice"] is True
+    assert "Can you read my chat with Sam" in prose
+
+
+def test_a_turn_that_only_attaches_a_file_keeps_its_place():
+    payload = conversation()
+    question = payload["mapping"]["question"]["message"]
+    question["create_time"] = 1700000000
+    question["content"] = {"content_type": "multimodal_text", "parts": []}
+    question["metadata"] = {"attachments": [{"id": "file-1", "name": "notes.txt", "mime_type": "text/plain", "size": 120}]}
+    text, metadata, prose, _ = render_conversation(payload)
+    assert "## user · 2023-11-14T22:13:20Z\n\nAttachment: notes.txt (text/plain, 120 bytes); not fetched" in text
+    assert metadata["segments"][0] == {**metadata["segments"][0], "role": "user", "text": "Attachment: notes.txt (text/plain, 120 bytes); not fetched"}
+    assert "notes.txt" not in prose
+    assert metadata["render_version"] >= 1
