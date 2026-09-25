@@ -107,14 +107,18 @@ The claude.ai source takes the same options.
 A conversation's text files come after its transcript, one document per file:
 text files uploaded into a message as `uploads/<name>`, and files ChatGPT wrote
 and linked from a reply as `outputs/<path>`, with those links pointing at them.
-The transcript header lists them. Binary outputs, files over 2 MiB, and files
+A file in `/mnt/data/` is named by its path there; one elsewhere in the sandbox,
+such as `/workspace/scratch/`, keeps its whole path. A zip is opened, and each
+text file in it follows as `outputs/<zip path>/<member>`. The transcript header
+lists them. Binary outputs, files over 2 MiB, zips over 16 MiB, and files
 ChatGPT no longer has are listed there with the reason instead. Uploaded images
 and other binary uploads stay as attachment references in their message.
 `metadata.files` lists each file with its origin, type, size, and whether it
 was included.
 
 `?file=<path>` reads one of them. `?files=inline` returns the transcript alone,
-with its links unchanged and no files fetched.
+with its links unchanged and no files fetched. `?files=outputs` fetches only
+the files ChatGPT wrote, leaving uploads as references in their message.
 
 ### Variants
 
@@ -330,6 +334,9 @@ are fetched.
 
 `?file=<path>` reads one of them. `?files=inline` returns the transcript alone,
 with uploads quoted in their messages and output files not fetched.
+`?files=outputs` quotes uploads the same way and follows the transcript with
+the files Claude wrote. A zip Claude wrote is opened into its text files, as
+ChatGPT's are.
 
 ### Listing and search
 

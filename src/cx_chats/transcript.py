@@ -59,7 +59,7 @@ def approx_tokens(segments: list[dict[str, Any]]) -> int | None:
 
 # Raised whenever a conversation renders differently, so a consumer that keeps renderings knows to
 # read its conversations again.
-RENDER_VERSION = 2
+RENDER_VERSION = 3
 
 
 class Segments:

@@ -249,8 +249,8 @@ def render_chat_map(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def render_conversation(
-    payload: dict[str, Any], *, attach_files: bool = False, outputs: Sequence[ChatFile] = (),
-    outputs_problem: str | None = None, tools: str = "lines", variants: str = "notes", variant: str | None = None,
+    payload: dict[str, Any], *, attach_files: bool = False, files_mode: str | None = None,
+    outputs: Sequence[ChatFile] = (), outputs_problem: str | None = None, tools: str = "lines", variants: str = "notes", variant: str | None = None,
     head_tokens: int = HEAD_TOKENS, tail_tokens: int = TAIL_TOKENS,
 ) -> tuple[str, dict[str, Any], str, list[str]]:
     if not isinstance(payload, dict):
@@ -259,7 +259,7 @@ def render_conversation(
     payload = variant_payload(payload, variant)
     branch, issues = active_branch(payload)
     forks = tree.forks_on([message.get("uuid") for message in branch]) if variants != "none" else {}
-    files = [*uploads(branch), *outputs] if attach_files else []
+    files = [*uploads(branch), *outputs] if attach_files else list(outputs)
     attached = iter(files) if attach_files else None
     calls = tool_calls(branch)
     call_for = {id(call.use if call.use is not None else call.result): call for call in calls}
@@ -389,7 +389,7 @@ def render_conversation(
         "approx_tokens": approx_tokens(turns),
         "segments": turns,
         "media_fetched": False,
-        "files_mode": "attach" if attach_files else "inline",
+        "files_mode": files_mode or ("attach" if attach_files else "inline"),
         "files": [file_summary(file) for file in files],
         "variant": variant,
         "variants": tree.summary(),

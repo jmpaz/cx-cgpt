@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..files import MAX_FILE_BYTES, ChatFile, decoded, textual, unique_label
+from ..files import MAX_ARCHIVE_BYTES, MAX_FILE_BYTES, ChatFile, archived, decoded, textual, unique_label, unpacked
 from ..http import TransportError
 from ..transcript import iso_timestamp
 
@@ -37,21 +37,25 @@ def uploads(branch: list[dict[str, Any]]) -> list[ChatFile]:
     return files
 
 
-def _output(client: Any, conversation_id: str, path: str, label: str, entry: dict[str, Any]) -> ChatFile:
+def _output(client: Any, conversation_id: str, path: str, label: str, entry: dict[str, Any]) -> list[ChatFile]:
     size = entry.get("size") if isinstance(entry.get("size"), int) else None
     content_type = entry.get("content_type") if isinstance(entry.get("content_type"), str) else None
     described = {"label": label, "origin": "output", "content_type": content_type, "size": size,
                  "created": iso_timestamp(entry.get("created_at")), "path": path}
-    if not textual(path, content_type):
-        return ChatFile(content=None, omitted="not text", **described)
-    if size is not None and size > MAX_FILE_BYTES:
-        return ChatFile(content=None, omitted="larger than 2 MiB", **described)
+    zipped = archived(path, content_type)
+    limit = MAX_ARCHIVE_BYTES if zipped else MAX_FILE_BYTES
+    if not zipped and not textual(path, content_type):
+        return [ChatFile(content=None, omitted="not text", **described)]
+    if size is not None and size > limit:
+        return [ChatFile(content=None, omitted="a zip larger than 16 MiB" if zipped else "larger than 2 MiB", **described)]
     try:
-        data = client.output_file(conversation_id, path, limit=MAX_FILE_BYTES)
+        data = client.output_file(conversation_id, path, limit=limit)
     except TransportError as error:
-        return ChatFile(content=None, omitted=f"download failed: {error}", **described)
+        return [ChatFile(content=None, omitted=f"download failed: {error}", **described)]
+    if zipped:
+        return unpacked(ChatFile(content=None, **described), data)
     text, omitted = decoded(data)
-    return ChatFile(content=text, omitted=omitted, **described)
+    return [ChatFile(content=text, omitted=omitted, **described)]
 
 
 def outputs(client: Any, conversation_id: str, *, only: str | None = None) -> list[ChatFile]:
@@ -66,10 +70,10 @@ def outputs(client: Any, conversation_id: str, *, only: str | None = None) -> li
         if not isinstance(path, str) or not path.strip():
             continue
         label = unique_label(path.removeprefix(SANDBOX) if path.startswith(SANDBOX) else path.lstrip("/"), taken)
-        if only is not None and label != only:
+        if only is not None and only != label and not only.startswith(label + "/"):
             continue
         if len(files) >= MAX_OUTPUTS:
             files.append(ChatFile(label, "output", None, path=path, omitted=f"beyond the first {MAX_OUTPUTS} files"))
             continue
-        files.append(_output(client, conversation_id, path, label, details.get(path, {})))
-    return files
+        files.extend(_output(client, conversation_id, path, label, details.get(path, {})))
+    return [file for file in files if file.label == only] if only is not None else files

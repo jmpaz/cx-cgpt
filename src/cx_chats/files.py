@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import io
+import zipfile
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
 from .transcript import label
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
+MAX_ARCHIVE_BYTES = 16 * 1024 * 1024
+MAX_ARCHIVE_FILES = 100
+_ARCHIVES = {"application/zip", "application/x-zip-compressed"}
 _TEXT_APPLICATIONS = {
     "application/json", "application/xml", "application/javascript", "application/x-yaml",
     "application/yaml", "application/toml", "application/sql", "application/x-sh",
@@ -51,6 +56,38 @@ def textual(path: str, content_type: str | None) -> bool:
     kind = (content_type or "").split(";")[0].strip().lower()
     return (kind.startswith("text/") or kind in _TEXT_APPLICATIONS
             or PurePosixPath(path).suffix.lower() in _TEXT_SUFFIXES)
+
+
+def archived(path: str, content_type: str | None) -> bool:
+    kind = (content_type or "").split(";")[0].strip().lower()
+    return kind in _ARCHIVES or PurePosixPath(path).suffix.lower() == ".zip"
+
+
+# A zip a model wrote is listed as the archive, and each text file in it follows as a file of its own
+# under the archive's label, the way a folder's files do.
+def unpacked(archive: ChatFile, data: bytes) -> list[ChatFile]:
+    try:
+        opened = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return [replace(archive, omitted="not a readable zip")]
+    members = [info for info in opened.infolist() if not info.is_dir()]
+    files = [replace(archive, size=archive.size or len(data), omitted=f"a zip; its {len(members)} files follow as {archive.label}/…")]
+    for number, info in enumerate(members):
+        member = ChatFile(f"{archive.label}/{info.filename}", archive.origin, None, created=archive.created,
+                          size=info.file_size, path=f"{archive.path}/{info.filename}")
+        if number >= MAX_ARCHIVE_FILES:
+            files.append(replace(member, omitted=f"beyond the first {MAX_ARCHIVE_FILES} files in the zip"))
+        elif not textual(info.filename, None):
+            files.append(replace(member, omitted="not text"))
+        elif info.file_size > MAX_FILE_BYTES:
+            files.append(replace(member, omitted="larger than 2 MiB"))
+        else:
+            try:
+                text, omitted = decoded(opened.read(info))
+            except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as error:
+                text, omitted = None, f"not readable from the zip: {error}"
+            files.append(replace(member, content=text, omitted=omitted))
+    return files
 
 
 def decoded(data: bytes) -> tuple[str | None, str | None]:

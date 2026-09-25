@@ -162,7 +162,7 @@ def _writing_block(match: re.Match[str]) -> str:
 
 def _reply(message: dict[str, Any], attach_files: bool) -> str:
     text = _WRITING.sub(_writing_block, _referenced(_text(_content(message)), _detail(message)))
-    return text.replace(SANDBOX_LINK, "outputs/") if attach_files else text
+    return text.replace(SANDBOX_LINK, "outputs/").replace("sandbox:/", "outputs/") if attach_files else text
 
 
 def _thoughts(content: dict[str, Any]) -> str:
@@ -406,6 +406,7 @@ def render_conversation(
     payload: dict[str, Any],
     *,
     attach_files: bool = False,
+    files_mode: str | None = None,
     files: Sequence[ChatFile] = (),
     files_problem: str | None = None,
     tools: str = "lines",
@@ -552,7 +553,7 @@ def render_conversation(
         "approx_tokens": approx_tokens(turns),
         "segments": turns,
         "media_fetched": False,
-        "files_mode": "attach" if attach_files else "inline",
+        "files_mode": files_mode or ("attach" if attach_files else "inline"),
         "files": [file_summary(file) for file in files],
         "variant": variant,
         "variants": tree.summary(),

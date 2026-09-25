@@ -99,8 +99,8 @@ def normalize_options(raw: dict[str, Any] | None, kind: str | None = None) -> di
         raise ValueError("tool must be a handle such as t3 or a range such as t3-t9")
     if "tools" in options and options["tools"] not in TOOL_MODES:
         raise ValueError("tools must be lines, preview, or none")
-    if "files" in options and options["files"] not in {"attach", "inline"}:
-        raise ValueError("files must be attach or inline")
+    if "files" in options and options["files"] not in {"attach", "inline", "outputs"}:
+        raise ValueError("files must be attach, inline or outputs")
     if "file" in options and not (isinstance(options["file"], str) and options["file"].strip()
                                   and not options["file"].startswith("/")):
         raise ValueError("file must be a path the transcript lists, such as outputs/notes.md")

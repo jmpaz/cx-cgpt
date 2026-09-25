@@ -178,6 +178,54 @@ def test_inline_files_keep_sandbox_links_and_make_no_file_requests(fake_client):
     assert fake_client.calls == [(f"/conversation/{ID}", None)]
 
 
+def zipped(**members):
+    import io
+    import zipfile
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, data in members.items():
+            archive.writestr(name, data)
+    return buffer.getvalue()
+
+
+def conversation_with_workspace_files(fake_client):
+    conversation_with_files(fake_client)
+    fake_client.responses[0]["mapping"]["summary"]["message"]["content"]["parts"] = [
+        "Saved [the account](sandbox:/workspace/scratch/8a0c/account.md) and "
+        "[the research](sandbox:/workspace/scratch/8a0c/research.zip)."
+    ]
+    fake_client.files.update({
+        "/workspace/scratch/8a0c/account.md": sandbox_info("account.md", "text/markdown"),
+        "/workspace/scratch/8a0c/research.zip": sandbox_info("research.zip", "application/zip"),
+    })
+    fake_client.downloads.update({
+        fake_client.files["/workspace/scratch/8a0c/account.md"]["download_url"]: b"# Account\n",
+        fake_client.files["/workspace/scratch/8a0c/research.zip"]["download_url"]: zipped(**{
+            "reports/one.md": "# One\n", "figure.png": "\x89PNG", "reports/": "",
+        }),
+    })
+
+
+def test_outputs_follow_the_transcript_from_anywhere_in_the_sandbox_and_a_zip_opens_into_its_files(fake_client):
+    conversation_with_workspace_files(fake_client)
+    transcript, *files = plugin.resolve(f"chatgpt:thread/{ID}?files=outputs", {})
+    assert [(file["label"], file["content"]) for file in files] == [
+        ("outputs/work/plan.md", "# Plan\n"), ("outputs/index.html", "<h1>Page</h1>\n"),
+        ("outputs/workspace/scratch/8a0c/account.md", "# Account\n"),
+        ("outputs/workspace/scratch/8a0c/research.zip/reports/one.md", "# One\n"),
+    ]
+    text = transcript["content"]
+    assert "[the account](outputs/workspace/scratch/8a0c/account.md)" in text
+    assert "a zip; its 2 files follow as outputs/workspace/scratch/8a0c/research.zip/…" in text
+    assert "- outputs/workspace/scratch/8a0c/research.zip/figure.png (5 bytes): not text" in text
+    assert "Attachment: notes.md (text/markdown, 6 bytes); not fetched" in text
+    assert ("uploaded_file", "file_notes") not in fake_client.calls
+    assert transcript["metadata"]["files_mode"] == "outputs"
+    conversation_with_workspace_files(fake_client)
+    member, = plugin.resolve(f"chatgpt:thread/{ID}?file=outputs/workspace/scratch/8a0c/research.zip/reports/one.md", {})
+    assert member["content"] == "# One\n"
+
+
 def test_one_file_reads_by_the_label_the_transcript_lists(fake_client):
     conversation_with_files(fake_client)
     output, = plugin.resolve(f"chatgpt:thread/{ID}?file=outputs/work/plan.md", {})

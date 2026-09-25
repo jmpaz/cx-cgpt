@@ -138,8 +138,8 @@ def normalize_options(
         not isinstance(options["query"], str) or not options["query"].strip()
     ):
         raise ValueError("query must be nonempty text")
-    if "files" in options and options["files"] not in {"attach", "inline"}:
-        raise ValueError("files must be attach or inline")
+    if "files" in options and options["files"] not in {"attach", "inline", "outputs"}:
+        raise ValueError("files must be attach, inline or outputs")
     if "file" in options and not (
         isinstance(options["file"], str)
         and options["file"].strip()

@@ -164,13 +164,14 @@ def resolve(target: str, context: dict) -> list[dict]:
             if "file" in parsed.options:
                 wanted = _conversation_file(client, view, parsed.conversation_id, parsed.options["file"])
                 return [_file_document(parsed.conversation_id, wanted)]
-            attach = (parsed.options.get("files", "attach") == "attach"
-                      and not parsed.options.keys() & {"tool", "map"})
+            mode = parsed.options.get("files", "attach") if not parsed.options.keys() & {"tool", "map"} else "inline"
             files = [
-                *uploads(client, view, parsed.conversation_id), *outputs(client, view, parsed.conversation_id),
-            ] if attach else []
+                *(uploads(client, view, parsed.conversation_id) if mode == "attach" else []),
+                *(outputs(client, view, parsed.conversation_id) if mode != "inline" else []),
+            ]
             base = Target("thread", parsed.conversation_id, {}).canonical
-            content, metadata, prose, authors, part = _render(payload, parsed, base, attach_files=attach, files=files)
+            content, metadata, prose, authors, part = _render(
+                payload, parsed, base, attach_files=mode != "inline", files_mode=mode, files=files)
             key = parsed.conversation_id + part
         else:
             payload = read_page(client, parsed)
@@ -221,7 +222,7 @@ def register_cli_options(command_name: str, command: Any) -> None:
             continue
         option_type = (
             click.Choice(["transcript", "json"]) if name == "output"
-            else click.Choice(["attach", "inline"]) if name == "files"
+            else click.Choice(["attach", "inline", "outputs"]) if name == "files"
             else click.Choice(list(TOOL_MODES)) if name == "tools"
             else click.Choice(list(VARIANT_MODES)) if name == "variants"
             else int if name in _INTEGER_OPTIONS else str

@@ -166,16 +166,17 @@ def _read_chat(client: ClaudeClient, parsed: Target) -> tuple[list[dict], dict]:
                                          tokens=options.get("result_tokens"), variant=options.get("variant"))
         prose, authors = "", []
     else:
-        attach = options.get("files", "attach") == "attach"
-        found, problem = _outputs(client, identifier) if attach else ([], None)
+        mode = options.get("files", "attach")
+        attach = mode == "attach"
+        found, problem = _outputs(client, identifier) if mode != "inline" else ([], None)
         content, metadata, prose, authors = render_conversation(
-            payload, attach_files=attach, outputs=found, outputs_problem=problem,
+            payload, attach_files=attach, files_mode=mode, outputs=found, outputs_problem=problem,
             tools=options.get("tools", "lines"), variants=options.get("variants", "notes"),
             variant=options.get("variant"),
             head_tokens=options.get("result_head_tokens", HEAD_TOKENS),
             tail_tokens=options.get("result_tail_tokens", TAIL_TOKENS),
         )
-        files = [*uploads(active_branch(view)[0]), *found] if attach else []
+        files = [*uploads(active_branch(view)[0]), *found] if attach else found
     metadata["source_url"] = f"https://claude.ai/chat/{identifier}"
     transcript = {
         "source": parsed.canonical, "label": metadata.get("title") or parsed.canonical,
@@ -232,7 +233,7 @@ def register_cli_options(command_name: str, command: Any) -> None:
             continue
         option_type = (
             click.Choice(["transcript", "json"]) if name == "output"
-            else click.Choice(["attach", "inline"]) if name == "files"
+            else click.Choice(["attach", "inline", "outputs"]) if name == "files"
             else click.Choice(list(TOOL_MODES)) if name == "tools"
             else click.Choice(list(VARIANT_MODES)) if name == "variants"
             else int if name in {"limit", "offset", "result_head_tokens", "result_tail_tokens",

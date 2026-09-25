@@ -129,6 +129,15 @@ def test_inline_files_keep_uploads_in_their_message_and_skip_outputs(fake_client
     assert fake_client.calls == [("conversation", CONVERSATION)]
 
 
+def test_outputs_mode_keeps_uploads_in_their_message_and_follows_with_the_files_claude_wrote(fake_client):
+    chat_with_files(fake_client)
+    transcript, *files = plugin.resolve(f"claude:chat/{CONVERSATION}?files=outputs", {})
+    assert "Attachment: notes.txt (txt, 5 bytes)\n\n```\nnotes\n```" in transcript["content"]
+    assert "Files following the transcript:\n- outputs/plan.md" in transcript["content"]
+    assert [file["label"] for file in files] == ["outputs/plan.md"]
+    assert transcript["metadata"]["files_mode"] == "outputs"
+
+
 def test_one_file_reads_by_the_path_the_transcript_lists(fake_client):
     chat_with_files(fake_client)
     output, = plugin.resolve(f"claude:chat/{CONVERSATION}?file=outputs/plan.md", {})
